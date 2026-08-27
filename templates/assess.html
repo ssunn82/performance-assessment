@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>{{ session_name }} - 打分界面</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container assess-container">
+        <header class="assess-header">
+            <h1>{{ session_name }}</h1>
+            <p>考核人：<strong>{{ assessor.name }}</strong></p>
+            {% if completed %}
+            <div class="status-badge status-completed">考核已完成</div>
+            {% else %}
+            <div class="status-badge status-pending">考核进行中</div>
+            {% endif %}
+        </header>
+
+        {% if completed %}
+        <div class="card completed-message">
+            <h2>感谢您的参与</h2>
+            <p>您的考核评分已全部提交完成，无法再修改。</p>
+        </div>
+        {% else %}
+
+        <!-- 被考核人列表区域 -->
+        <div class="card" id="evaluatee-list-card">
+            <!-- 说明文字 - 只在列表页显示 -->
+            {% if instruction %}
+            <div class="instruction-card">
+                <div id="instruction-text">{{ instruction | safe }}</div>
+            </div>
+            {% endif %}
+
+            <h2>待考核人员</h2>
+            <p class="hint">点击人员姓名进入评分，分数可暂存，提交后不可修改。</p>
+            {% for rel in relations %}
+            <div class="evaluatee-item" onclick="showEvaluatee({{ rel.evaluatee_id }})">
+                <div class="evaluatee-info">
+                    <span class="evaluatee-name">{{ rel.evaluatee_name }}</span>
+                    <span class="evaluatee-dept">{{ rel.department or '未知部门' }}</span>
+                </div>
+                <div class="evaluatee-status" id="status-{{ rel.evaluatee_id }}">
+                    {% if score_map.get(rel.evaluatee_id) %}
+                    <span class="badge badge-success">已评分</span>
+                    <span class="evaluatee-total">当前总分: {{ evaluatee_scores.get(rel.evaluatee_id, 0) }}</span>
+                    {% else %}
+                    <span class="badge badge-pending">待评分</span>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+
+            <div class="score-actions" style="margin-top:20px;">
+                <button type="button" class="btn-submit" onclick="submitAllScores()">提交全部考核</button>
+            </div>
+        </div>
+
+        <!-- 打分区域 -->
+        <div class="card score-area" id="score-area" style="display:none;">
+            <h2 id="score-title">评分中</h2>
+            <div class="score-summary">
+                <span id="current-evaluatee-name"></span>
+                <span id="current-evaluatee-info"></span>
+            </div>
+
+            <!-- 部门参考分 -->
+            <div class="dept-ref-score">
+                <span>部门考核得分(参考值)：</span>
+                <strong id="dept-ref-score-value">-</strong>
+            </div>
+
+            <form id="score-form">
+                <input type="hidden" id="assessor-id" value="{{ assessor.id }}">
+                <input type="hidden" id="evaluatee-id" value="">
+
+                {% for ind in indicators %}
+                <div class="score-item">
+                    <label>{{ ind.name }}
+                        <span class="indicator-meta">
+                            (权重 {{ "%.0f%%" | format(ind.weight * 100) }}，满分 {{ ind.max_score }} 分)
+                        </span>
+                    </label>
+                    <div class="score-input">
+                        <input type="number"
+                               id="score-{{ ind.id }}"
+                               name="score_{{ ind.id }}"
+                               min="0"
+                               max="{{ ind.max_score }}"
+                               step="0.1"
+                               placeholder="0-{{ ind.max_score }}"
+                               data-indicator-id="{{ ind.id }}"
+                               data-weight="{{ ind.weight }}"
+                               data-max="{{ ind.max_score }}"
+                               oninput="updateTotal()">
+                    </div>
+                </div>
+                {% endfor %}
+
+                <div class="score-total">
+                    <span>加权总分（预览）：</span>
+                    <strong id="total-score">0.00</strong>
+                </div>
+
+                <div class="score-actions">
+                    <button type="button" class="btn-save" onclick="saveCurrentScores()">暂存</button>
+                    <button type="button" class="btn-next" onclick="nextEvaluatee()">下一个</button>
+                    <button type="button" class="btn-back" onclick="hideScoreArea()">返回列表</button>
+                </div>
+            </form>
+        </div>
+
+        {% endif %}
+    </div>
+
+    <script>
+        const ASSESSOR_ID = {{ assessor.id }};
+        const RELATIONS = {{ relations | tojson }};
+        const INDICATORS = {{ indicators | tojson }};
+        const SCORE_MAP = {{ score_map | tojson }};
+        const COMPLETED = {{ completed | tojson }};
+    </script>
+    <script src="/static/js/assess.js"></script>
+</body>
+</html>

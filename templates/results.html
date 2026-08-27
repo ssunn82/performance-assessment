@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>考核结果汇总</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>考核结果汇总</h1>
+            <p>{{ session.name }} ({{ session.quarter }})</p>
+            <div class="header-right">
+                <a href="/" class="tab tab-link">返回后台</a>
+                <a href="/logout" class="btn-logout">退出</a>
+            </div>
+        </header>
+
+        <nav class="tabs">
+            <a href="/" class="tab tab-link">返回管理后台</a>
+            <a href="/progress" class="tab tab-link">考核进度</a>
+            <a href="/api/export/excel" class="tab tab-link">导出Excel</a>
+        </nav>
+
+        <!-- 进度概览 -->
+        <div class="card">
+            <h2>考核进度</h2>
+            <div class="progress-info">
+                <span class="badge badge-success">已提交：{{ completed_count }} / {{ total_assessors }}</span>
+                <span class="badge">被考核人：{{ total_evaluatees }} 人</span>
+            </div>
+        </div>
+
+        <!-- 结果排名 -->
+        <div class="card">
+            <h2>加权得分排名</h2>
+            <p class="hint">最终得分 = 各考核人加权得分 × 考核人权重 的总和。等级判定请在导出Excel后按制度规则手动分配。</p>
+            {% if final_scores %}
+            <div class="table-wrapper">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>排名</th>
+                        <th>工号</th>
+                        <th>姓名</th>
+                        <th>职务</th>
+                        <th>部门</th>
+                        <th>组别</th>
+                        <th>最终得分</th>
+                        <th>各考核人得分明细</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for fs in final_scores %}
+                    <tr>
+                        <td data-label="排名">{{ loop.index }}</td>
+                        <td data-label="工号">{{ fs.evaluatee_employee_id or '-' }}</td>
+                        <td data-label="姓名">{{ fs.evaluatee_name }}</td>
+                        <td data-label="职务">{{ fs.position or '-' }}</td>
+                        <td data-label="部门">{{ fs.department or '-' }}</td>
+                        <td data-label="组别">{{ fs.group_type or '-' }}</td>
+                        <td data-label="最终得分"><strong>{{ "%.2f" | format(fs.final_score) }}</strong></td>
+                        <td data-label="明细">
+                            {% for aid, adata in fs.assessors.items() %}
+                            <div class="detail-line">
+                                {{ adata.assessor_name }} (权重{{ "%.0f%%" | format(adata.assessor_weight * 100) }}):
+                                {{ "%.2f" | format(adata.weighted_total) }}
+                            </div>
+                            {% endfor %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            </div>
+            {% else %}
+            <p class="hint">暂无考核结果数据。请等待考核人完成打分并提交。</p>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>

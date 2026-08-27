@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>管理后台登录</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="login-body">
+    <div class="login-container">
+        <div class="login-card">
+            <h1>中层绩效考核系统</h1>
+            <p>管理后台登录</p>
+            <form id="login-form" class="login-form">
+                <div class="login-field">
+                    <label>用户名</label>
+                    <input type="text" name="username" placeholder="请输入用户名" required autocomplete="username">
+                </div>
+                <div class="login-field">
+                    <label>密码</label>
+                    <input type="password" name="password" placeholder="请输入密码" required autocomplete="current-password">
+                </div>
+                <button type="submit" class="btn-login">登录</button>
+                <p class="login-hint">默认用户名：admin / 密码：admin123</p>
+            </form>
+        </div>
+    </div>
+    <script>
+        document.getElementById('login-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const res = await fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    username: form.username.value,
+                    password: form.password.value
+                })
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                window.location.href = '/';
+            } else {
+                alert(data.message || '登录失败');
+            }
+        });
+    </script>
+</body>
+</html>

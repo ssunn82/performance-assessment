@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>中层绩效考核 - 管理后台</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>中层绩效考核管理系统</h1>
+            <p>多季度考核任务管理平台</p>
+            <div class="header-right">
+                <span class="user-badge">{{ username }}</span>
+                <a href="/logout" class="btn-logout">退出</a>
+            </div>
+        </header>
+
+        <!-- 考核任务选择 -->
+        <div class="session-bar">
+            <label>当前考核任务：</label>
+            <select id="session-selector" onchange="switchSession(this.value)">
+                {% for s in sessions %}
+                <option value="{{ s.id }}" {% if s.status == 'active' %}selected{% endif %}>
+                    {{ s.name }} ({{ s.quarter }})
+                </option>
+                {% endfor %}
+            </select>
+            <button class="btn-primary" onclick="showCreateSession()">新建考核</button>
+        </div>
+
+        <!-- 新建考核对话框 -->
+        <div class="modal-overlay" id="session-modal" style="display:none;">
+            <div class="modal-content">
+                <h3>新建考核任务</h3>
+                <form id="create-session-form">
+                    <div class="form-row">
+                        <label>考核名称：</label>
+                        <input type="text" name="name" placeholder="如：2026年三季度中层考核" required>
+                    </div>
+                    <div class="form-row">
+                        <label>季度：</label>
+                        <input type="text" name="quarter" placeholder="如：2026-Q3" required>
+                    </div>
+                    <div class="modal-actions">
+                        <button type="submit" class="btn-primary">创建</button>
+                        <button type="button" class="btn-back" onclick="document.getElementById('session-modal').style.display='none'">取消</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- 导航标签 -->
+        <nav class="tabs">
+            <button class="tab active" data-tab="assessors">考核人</button>
+            <button class="tab" data-tab="evaluatees">被考核人</button>
+            <button class="tab" data-tab="relations">考核关系</button>
+            <button class="tab" data-tab="indicators">指标体系</button>
+            <button class="tab" data-tab="qrcodes">二维码</button>
+            <button class="tab" data-tab="settings">设置</button>
+            <a href="/progress" class="tab tab-link">考核进度</a>
+            <a href="/results" class="tab tab-link">查看结果</a>
+        </nav>
+
+        <!-- 考核人配置 -->
+        <div class="tab-content active" id="assessors-tab">
+            <div class="card">
+                <h2>添加考核人</h2>
+                <form id="add-assessor-form" class="form-inline">
+                    <input type="text" name="employee_id" placeholder="工号" required>
+                    <input type="text" name="name" placeholder="姓名" required>
+                    <button type="submit">添加</button>
+                </form>
+            </div>
+            <div class="card">
+                <h2>Excel 批量导入</h2>
+                <div class="import-section">
+                    <a href="/api/templates/assessors" class="btn-download">下载模板</a>
+                    <input type="file" id="assessor-file" accept=".xlsx" style="display:none" onchange="importAssessors(this)">
+                    <button class="btn-save" onclick="document.getElementById('assessor-file').click()">导入Excel</button>
+                </div>
+            </div>
+            <div class="card">
+                <h2>考核人列表</h2>
+                <div class="table-wrapper">
+                <table class="data-table">
+                    <thead>
+                        <tr><th>工号</th><th>姓名</th><th>操作</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for a in assessors %}
+                        <tr>
+                            <td>{{ a.employee_id or '-' }}</td>
+                            <td>{{ a.name }}</td>
+                            <td><button class="btn-delete" onclick="deleteAssessor({{ a.id }})">删除</button></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- 被考核人配置 -->
+        <div class="tab-content" id="evaluatees-tab">
+            <div class="card">
+                <h2>添加被考核人</h2>
+                <form id="add-evaluatee-form" class="form-inline">
+                    <input type="text" name="employee_id" placeholder="工号" required>
+                    <input type="text" name="name" placeholder="姓名" required>
+                    <input type="text" name="department" placeholder="部门">
+                    <input type="text" name="position" placeholder="职务">
+                    <select name="group_type">
+                        <option value="">选择组别</option>
+                        <option value="业务前端">业务前端</option>
+                        <option value="技术中台">技术中台</option>
+                        <option value="管理后台">管理后台</option>
+                    </select>
+                    <input type="text" name="department_ref_score" placeholder="部门参考分">
+                    <button type="submit">添加</button>
+                </form>
+            </div>
+            <div class="card">
+                <h2>Excel 批量导入</h2>
+                <div class="import-section">
+                    <a href="/api/templates/evaluatees" class="btn-download">下载模板</a>
+                    <input type="file" id="evaluatee-file" accept=".xlsx" style="display:none" onchange="importEvaluatees(this)">
+                    <button class="btn-save" onclick="document.getElementById('evaluatee-file').click()">导入Excel</button>
+                </div>
+            </div>
+            <div class="card">
+                <h2>被考核人列表</h2>
+                <div class="table-wrapper">
+                <table class="data-table">
+                    <thead>
+                        <tr><th>工号</th><th>姓名</th><th>部门</th><th>职务</th><th>组别</th><th>部门参考分</th><th>操作</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for e in evaluatees %}
+                        <tr>
+                            <td>{{ e.employee_id or '-' }}</td>
+                            <td>{{ e.name }}</td>
+                            <td>{{ e.department or '-' }}</td>
+                            <td>{{ e.position or '-' }}</td>
+                            <td><span class="badge">{{ e.group_type or '未分类' }}</span></td>
+                            <td>{{ e.department_ref_score if e.department_ref_score is not none else '-' }}</td>
+                            <td><button class="btn-delete" onclick="deleteEvaluatee({{ e.id }})">删除</button></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- 考核关系 -->
+        <div class="tab-content" id="relations-tab">
+            <div class="card">
+                <h2>添加考核关系</h2>
+                <p class="hint">权重示例：中层正职考核 = 党委书记(0.35) + 总经理(0.35) + 分管领导(0.30)</p>
+                <form id="add-relation-form" class="form-inline">
+                    <select name="assessor_id" required>
+                        <option value="">选择考核人</option>
+                        {% for a in assessors %}
+                        <option value="{{ a.id }}">{{ a.name }} ({{ a.employee_id or '无工号' }})</option>
+                        {% endfor %}
+                    </select>
+                    <select name="evaluatee_id" required>
+                        <option value="">选择被考核人</option>
+                        {% for e in evaluatees %}
+                        <option value="{{ e.id }}">{{ e.name }} ({{ e.employee_id or '无工号' }})</option>
+                        {% endfor %}
+                    </select>
+                    <input type="number" name="weight" placeholder="权重(0-1)" step="0.01" min="0" max="1" value="1.0">
+                    <button type="submit">添加</button>
+                </form>
+            </div>
+            <div class="card">
+                <h2>Excel 批量导入</h2>
+                <div class="import-section">
+                    <a href="/api/templates/relations" class="btn-download">下载模板</a>
+                    <input type="file" id="relation-file" accept=".xlsx" style="display:none" onchange="importRelations(this)">
+                    <button class="btn-save" onclick="document.getElementById('relation-file').click()">导入Excel</button>
+                </div>
+            </div>
+            <div class="card">
+                <h2>考核关系列表 <span class="hint" style="font-size:0.85rem;">（当前考核任务）</span></h2>
+                <div class="table-wrapper">
+                <table class="data-table">
+                    <thead>
+                        <tr><th>考核人</th><th>被考核人</th><th>权重</th><th>操作</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for r in relations %}
+                        <tr>
+                            <td>{{ r.assessor_name }}</td>
+                            <td>{{ r.evaluatee_name }}</td>
+                            <td>{{ "%.0f%%" | format(r.weight * 100) }}</td>
+                            <td><button class="btn-delete" onclick="deleteRelation({{ r.id }})">删除</button></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- 指标体系 -->
+        <div class="tab-content" id="indicators-tab">
+            <div class="card">
+                <h2>添加考核指标</h2>
+                <p class="hint">所有指标权重之和应为 100%。例如：工作业绩 70% + 能力评价 30%</p>
+                <form id="add-indicator-form" class="form-inline">
+                    <input type="text" name="name" placeholder="指标名称" required>
+                    <input type="number" name="weight" placeholder="权重(%)" step="0.1" min="0" max="100" value="10">
+                    <input type="number" name="max_score" placeholder="满分" step="1" min="1" value="100">
+                    <button type="submit">添加</button>
+                </form>
+            </div>
+            <div class="card">
+                <h2>指标列表</h2>
+                <div class="table-wrapper">
+                <table class="data-table">
+                    <thead>
+                        <tr><th>指标名称</th><th>权重</th><th>满分</th><th>操作</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for i in indicators %}
+                        <tr>
+                            <td>{{ i.name }}</td>
+                            <td>{{ "%.0f%%" | format(i.weight * 100) }}</td>
+                            <td>{{ i.max_score }}</td>
+                            <td><button class="btn-delete" onclick="deleteIndicator({{ i.id }})">删除</button></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- 二维码 -->
+        <div class="tab-content" id="qrcodes-tab">
+            <div class="card">
+                <h2>考核二维码</h2>
+                <div class="import-section">
+                    <a href="/api/export/qrcodes" class="btn-submit">导出二维码Excel</a>
+                </div>
+                <p class="hint" style="margin-top:12px;">为每个考核人生成专属二维码，扫码后进入打分界面。</p>
+                {% if not assessors %}
+                <p class="hint">请先添加考核人。</p>
+                {% endif %}
+                <div class="qrcode-grid">
+                    {% for a in assessors %}
+                    <div class="qrcode-item">
+                        <img src="/api/qrcode/{{ a.id }}" alt="{{ a.name }}" class="qrcode-img">
+                        <p>{{ a.name }}</p>
+                        <a href="/assess/{{ a.id }}" class="btn-download" target="_blank">预览打分页</a>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <!-- 设置 -->
+        <div class="tab-content" id="settings-tab">
+            <div class="card">
+                <h2>打分页面说明文字</h2>
+                <p class="hint">此文字将显示在打分页面待考核人员列表的上方。支持富文本编辑，可调整字体、格式，可粘贴表格。</p>
+
+                <!-- 富文本工具栏 -->
+                <div class="rich-toolbar">
+                    <select onchange="formatDoc('fontSize', this.value); this.selectedIndex=0">
+                        <option value="">字号</option>
+                        <option value="2">小</option>
+                        <option value="3">正常</option>
+                        <option value="4">大</option>
+                        <option value="5">很大</option>
+                        <option value="6">最大</option>
+                    </select>
+                    <button type="button" onclick="formatDoc('bold')" title="加粗"><b>B</b></button>
+                    <button type="button" onclick="formatDoc('italic')" title="斜体"><i>I</i></button>
+                    <button type="button" onclick="formatDoc('underline')" title="下划线"><u>U</u></button>
+                    <button type="button" onclick="formatDoc('strikeThrough')" title="删除线"><s>S</s></button>
+                    <input type="color" onchange="formatDoc('foreColor', this.value)" title="文字颜色">
+                    <button type="button" onclick="formatDoc('justifyLeft')" title="左对齐">左</button>
+                    <button type="button" onclick="formatDoc('justifyCenter')" title="居中">中</button>
+                    <button type="button" onclick="formatDoc('justifyRight')" title="右对齐">右</button>
+                    <button type="button" onclick="formatDoc('insertUnorderedList')" title="无序列表">•</button>
+                    <button type="button" onclick="formatDoc('insertOrderedList')" title="有序列表">1.</button>
+                    <button type="button" onclick="createLink()" title="插入链接">链接</button>
+                    <button type="button" onclick="formatDoc('removeFormat')" title="清除格式">清除</button>
+                </div>
+
+                <div id="instruction-editor" contenteditable="true" class="rich-editor">{{ instruction | safe }}</div>
+                <div style="margin-top:12px;">
+                    <button class="btn-primary" onclick="saveSettings()">保存设置</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>修改密码</h2>
+                <form id="change-password-form" class="form-inline" style="flex-direction:column;align-items:stretch;">
+                    <input type="password" name="old_password" placeholder="原密码" required style="margin-bottom:8px;">
+                    <input type="password" name="new_password" placeholder="新密码" required style="margin-bottom:8px;">
+                    <input type="password" name="confirm_password" placeholder="确认新密码" required style="margin-bottom:8px;">
+                    <button type="submit" class="btn-primary" style="max-width:200px;">修改密码</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/main.js"></script>
+</body>
+</html>

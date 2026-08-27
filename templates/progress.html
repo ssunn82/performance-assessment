@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>考核进度</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>考核进度</h1>
+            <p>{{ session.name }} ({{ session.quarter }})</p>
+            <div class="header-right">
+                <a href="/" class="tab tab-link">返回后台</a>
+                <a href="/logout" class="btn-logout">退出</a>
+            </div>
+        </header>
+
+        <nav class="tabs">
+            <a href="/" class="tab tab-link">返回管理后台</a>
+            <a href="/results" class="tab tab-link">查看结果</a>
+            <a href="/api/export/excel" class="tab tab-link">导出Excel</a>
+        </nav>
+
+        <!-- 进度概览 -->
+        <div class="card">
+            <h2>进度概览</h2>
+            <div class="progress-overview">
+                <div class="progress-stat">
+                    <span class="progress-num">{{ stats.total }}</span>
+                    <span class="progress-label">考核人总数</span>
+                </div>
+                <div class="progress-stat stat-completed">
+                    <span class="progress-num">{{ stats.completed }}</span>
+                    <span class="progress-label">已完成</span>
+                </div>
+                <div class="progress-stat stat-progress">
+                    <span class="progress-num">{{ stats.in_progress }}</span>
+                    <span class="progress-label">进行中</span>
+                </div>
+                <div class="progress-stat stat-pending">
+                    <span class="progress-num">{{ stats.not_started }}</span>
+                    <span class="progress-label">未开始</span>
+                </div>
+            </div>
+            {% if stats.total > 0 %}
+            <div class="progress-bar-container">
+                <div class="progress-bar" style="width: {{ (stats.completed / stats.total * 100) | round }}%;"></div>
+            </div>
+            <p class="hint" style="text-align:center;margin-top:8px;">
+                完成率：{{ "%.1f%%" | format(stats.completed / stats.total * 100) }}
+            </p>
+            {% endif %}
+        </div>
+
+        <!-- 考核人进度明细 -->
+        <div class="card">
+            <h2>考核人进度明细</h2>
+            {% if progress %}
+            <div class="table-wrapper">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>考核人</th>
+                        <th>工号</th>
+                        <th>状态</th>
+                        <th>已打分/总人数</th>
+                        <th>进度</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for p in progress %}
+                    <tr>
+                        <td data-label="考核人">{{ p.assessor_name }}</td>
+                        <td data-label="工号">{{ p.employee_id or '-' }}</td>
+                        <td data-label="状态">
+                            {% if p.status == '已完成' %}
+                            <span class="badge badge-success">{{ p.status }}</span>
+                            {% elif p.status == '进行中' %}
+                            <span class="badge badge-pending">{{ p.status }}</span>
+                            {% else %}
+                            <span class="badge badge-work">{{ p.status }}</span>
+                            {% endif %}
+                        </td>
+                        <td data-label="已打分">{{ p.scored_evaluatees }} / {{ p.total_evaluatees }}</td>
+                        <td data-label="进度">
+                            {% if p.total_evaluatees > 0 %}
+                            <div class="mini-progress-bar">
+                                <div class="mini-progress-fill" style="width: {{ (p.scored_evaluatees / p.total_evaluatees * 100) | round }}%;"></div>
+                            </div>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            </div>
+            {% else %}
+            <p class="hint">暂无考核人数据。请先在管理后台导入考核关系。</p>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>
