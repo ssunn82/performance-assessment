@@ -95,6 +95,11 @@ class PasswordChange(BaseModel):
     new_password: str
 
 
+class LifecycleRequest(BaseModel):
+    action: str  # start_test | start | pause | resume | end
+    clear_scores: bool = False
+
+
 # ==================== 认证辅助 ====================
 def is_logged_in(request: Request) -> bool:
     return request.session.get("logged_in") is True
@@ -177,11 +182,30 @@ async def assess_page(request: Request, assessor_id: int):
             "message": "考核人不存在或二维码已失效"
         })
 
+    lifecycle = db.get_session_lifecycle(session_id)
+    session = db.get_current_session()
+
+    # 未启动/暂停/结束：完全不可进入打分，仅显示状态提示页
+    lock_message = LIFECYCLE_LOCK_MESSAGES.get(lifecycle)
+    if lock_message:
+        return templates.TemplateResponse(request, "assess.html", {
+            "assessor": assessor,
+            "lock_message": lock_message,
+            "lock_label": LIFECYCLE_LABELS.get(lifecycle, lifecycle),
+            "is_testing": False,
+            "session_name": session['name'] if session else "考核",
+            "relations": [],
+            "indicators": [],
+            "score_map": {},
+            "evaluatee_scores": {},
+            "completed": False,
+            "instruction": "",
+        })
+
     completed = db.is_assessor_completed(assessor_id, session_id)
     relations = db.get_assessor_relations(assessor_id, session_id)
     indicators = db.get_all_indicators()
     score_map = db.get_score_map(assessor_id, session_id)
-    session = db.get_current_session()
 
     evaluatee_scores = {}
     for rel in relations:
@@ -202,6 +226,7 @@ async def assess_page(request: Request, assessor_id: int):
         "completed": completed,
         "instruction": db.get_setting("assess_instruction", ""),
         "session_name": session['name'] if session else "考核",
+        "is_testing": lifecycle == 'testing',
     })
 
 
@@ -288,6 +313,42 @@ async def clear_session_data(request: Request, session_id: int):
     return {"message": "已清空当前考核任务的关系和打分"}
 
 
+# ==================== 考核任务生命周期 API ====================
+LIFECYCLE_LABELS = {
+    "draft": "未启动",
+    "testing": "测试模式",
+    "running": "正式考核",
+    "paused": "已暂停",
+    "ended": "已结束",
+}
+LIFECYCLE_LOCK_MESSAGES = {
+    "draft": "考核尚未启动，请稍后再试。",
+    "paused": "考核已暂停，请等待管理员恢复后继续。",
+    "ended": "考核已结束，感谢您的参与。",
+}
+
+
+@app.get("/api/sessions/current/lifecycle", response_class=JSONResponse)
+async def get_current_lifecycle(request: Request):
+    if not is_logged_in(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+    db = get_db()
+    lifecycle = db.get_session_lifecycle()
+    return {"lifecycle": lifecycle, "label": LIFECYCLE_LABELS.get(lifecycle, lifecycle)}
+
+
+@app.post("/api/sessions/{session_id}/lifecycle", response_class=JSONResponse)
+async def set_session_lifecycle(request: Request, session_id: int, req: LifecycleRequest):
+    if not is_logged_in(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+    db = get_db()
+    result = db.set_lifecycle(session_id, req.action, clear_scores=req.clear_scores)
+    if not result.get("success"):
+        return JSONResponse(result, status_code=400)
+    result["label"] = LIFECYCLE_LABELS.get(result["lifecycle"], result["lifecycle"])
+    return result
+
+
 # ==================== 考核人 API ====================
 @app.post("/api/assessors", response_class=JSONResponse)
 async def create_assessor(request: Request, req: AssessorCreate):
@@ -372,6 +433,12 @@ async def delete_indicator(request: Request, indicator_id: int):
 async def batch_save_scores(assessor_id: int, req: ScoreBatchSave):
     db = get_db()
     session_id = db.get_current_session_id()
+    lifecycle = db.get_session_lifecycle(session_id)
+    if lifecycle not in ('testing', 'running'):
+        return JSONResponse({
+            "success": False,
+            "message": f"当前考核状态（{LIFECYCLE_LABELS.get(lifecycle, lifecycle)}）不允许打分"
+        }, status_code=403)
     if db.is_assessor_completed(assessor_id, session_id):
         raise HTTPException(status_code=400, detail="考核已完成，无法修改")
 
@@ -398,6 +465,12 @@ async def batch_save_scores(assessor_id: int, req: ScoreBatchSave):
 async def submit_scores(assessor_id: int):
     db = get_db()
     session_id = db.get_current_session_id()
+    lifecycle = db.get_session_lifecycle(session_id)
+    if lifecycle not in ('testing', 'running'):
+        return JSONResponse({
+            "success": False,
+            "message": f"当前考核状态（{LIFECYCLE_LABELS.get(lifecycle, lifecycle)}）不允许提交"
+        }, status_code=403)
 
     if db.is_assessor_completed(assessor_id, session_id):
         return {"success": True, "message": "考核已完成"}
@@ -420,6 +493,25 @@ async def submit_scores(assessor_id: int):
     summary = db.get_assessment_summary(assessor_id, session_id)
 
     return {"success": True, "message": "考核提交成功！", "summary": summary}
+
+
+@app.post("/api/scores/{assessor_id}/reset", response_class=JSONResponse)
+async def reset_assessor_scores(request: Request, assessor_id: int):
+    """管理员重置考核人打分状态：归档原打分记录到历史表，解锁重新打分（旧分数保留为预填）"""
+    if not is_logged_in(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+    db = get_db()
+    assessors = db.get_all_assessors()
+    assessor = next((a for a in assessors if a['id'] == assessor_id), None)
+    if not assessor:
+        return JSONResponse({"success": False, "message": "考核人不存在"}, status_code=404)
+
+    archived = db.reset_assessor(assessor_id)
+    return {
+        "success": True,
+        "message": f"已重置 {assessor['name']} 的考核状态，原打分记录（{archived} 条）已归档，可重新扫码打分提交",
+        "archived": archived
+    }
 
 
 # ==================== 设置 API ====================

@@ -1193,3 +1193,140 @@ header {
     border-radius: var(--radius);
     margin-bottom: 20px;
 }
+
+/* ========== 考核任务生命周期 ========== */
+.lifecycle-card {
+    border-left: 4px solid var(--primary-color);
+}
+
+.lifecycle-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.lifecycle-badge {
+    display: inline-block;
+    padding: 4px 14px;
+    border-radius: 999px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.lc-draft { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
+.lc-testing { background: #fefce8; color: #a16207; border: 1px solid #facc15; }
+.lc-running { background: #f0fdf4; color: #15803d; border: 1px solid #4ade80; }
+.lc-paused { background: #eff6ff; color: #1d4ed8; border: 1px solid #93c5fd; }
+.lc-ended { background: #fef2f2; color: #b91c1c; border: 1px solid #fca5a5; }
+
+.lifecycle-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.lifecycle-actions button {
+    min-height: 40px;
+    padding: 8px 18px;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 0.95rem;
+    cursor: pointer;
+    color: white;
+}
+
+.btn-warn { background: var(--warning-color); }
+.btn-warn:hover { background: #a16207; }
+
+.btn-danger { background: var(--danger-color); }
+.btn-danger:hover { background: #b91c1c; }
+
+/* ========== 打分页状态提示 ========== */
+.status-locked { background: #64748b; }
+
+.status-lock-card {
+    text-align: center;
+    padding: 48px 24px;
+}
+
+.status-lock-card h2 {
+    margin: 16px 0 8px;
+    color: var(--gray-800);
+}
+
+.status-lock-card p {
+    color: var(--gray-600);
+    font-size: 1.05rem;
+}
+
+.lock-icon-circle {
+    width: 72px;
+    height: 72px;
+    margin: 0 auto;
+    border-radius: 50%;
+    background: #f1f5f9;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #64748b;
+}
+
+/* 测试模式横幅 */
+.test-mode-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: #fefce8;
+    border: 1px dashed #facc15;
+    color: #854d0e;
+    padding: 12px 16px;
+    border-radius: var(--radius);
+    margin-bottom: 16px;
+    font-size: 0.95rem;
+    line-height: 1.5;
+}
+
+.test-mode-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #f59e0b;
+    flex-shrink: 0;
+}
+
+/* ========== 进度页重置 ========== */
+.btn-reset {
+    background: white;
+    color: var(--warning-color);
+    border: 1px solid var(--warning-color);
+    border-radius: var(--radius);
+    padding: 5px 12px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    min-height: 32px;
+}
+
+.btn-reset:hover { background: #fefce8; }
+
+.badge-reset {
+    display: inline-block;
+    margin-left: 6px;
+    background: #fff7ed;
+    color: #c2410c;
+    border: 1px solid #fdba74;
+    border-radius: 999px;
+    padding: 1px 8px;
+    font-size: 0.75rem;
+    white-space: nowrap;
+}
+
+.reset-count-text { color: var(--gray-600); font-size: 0.9rem; }
+
+@media (max-width: 768px) {
+    .lifecycle-header { flex-direction: column; align-items: flex-start; }
+    .lifecycle-actions button { flex: 1; min-height: 44px; }
+    .status-lock-card { padding: 36px 16px; }
+}

@@ -67,6 +67,8 @@
                         <th>状态</th>
                         <th>已打分/总人数</th>
                         <th>进度</th>
+                        <th>重置</th>
+                        <th>操作</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -82,6 +84,9 @@
                             {% else %}
                             <span class="badge badge-work">{{ p.status }}</span>
                             {% endif %}
+                            {% if p.reset_count > 0 %}
+                            <span class="badge badge-reset" title="该考核人已被管理员重置过 {{ p.reset_count }} 次">已重置{{ p.reset_count }}次</span>
+                            {% endif %}
                         </td>
                         <td data-label="已打分">{{ p.scored_evaluatees }} / {{ p.total_evaluatees }}</td>
                         <td data-label="进度">
@@ -89,6 +94,16 @@
                             <div class="mini-progress-bar">
                                 <div class="mini-progress-fill" style="width: {{ (p.scored_evaluatees / p.total_evaluatees * 100) | round }}%;"></div>
                             </div>
+                            {% endif %}
+                        </td>
+                        <td data-label="重置">
+                            <span class="reset-count-text">{{ p.reset_count if p.reset_count > 0 else '-' }}</span>
+                        </td>
+                        <td data-label="操作">
+                            {% if p.status == '已完成' %}
+                            <button class="btn-reset" onclick="resetAssessor({{ p.assessor_id }}, '{{ p.assessor_name }}')">重置打分</button>
+                            {% else %}
+                            <span class="hint">-</span>
                             {% endif %}
                         </td>
                     </tr>
@@ -99,7 +114,26 @@
             {% else %}
             <p class="hint">暂无考核人数据。请先在管理后台导入考核关系。</p>
             {% endif %}
+            <p class="hint" style="margin-top:12px;">「重置打分」会将该考核人的提交状态解锁（原打分记录自动归档保留），其重新扫码后可看到旧分数并修改后重新提交。重置次数计入「重置」列。</p>
         </div>
     </div>
+
+    <script>
+        async function resetAssessor(assessorId, name) {
+            const msg = '确定要重置「' + name + '」的考核状态吗？\n\n' +
+                '· 其原有打分记录将自动归档保留\n' +
+                '· 重新扫码打分时可见旧分数，可修改后重新提交\n' +
+                '· 最终成绩按其最新一次提交计算';
+            if (!confirm(msg)) return;
+            const res = await fetch('/api/scores/' + assessorId + '/reset', { method: 'POST' });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data.success) {
+                alert(data.message);
+                location.reload();
+            } else {
+                alert('重置失败：' + (data.message || data.error || '未知错误'));
+            }
+        }
+    </script>
 </body>
 </html>

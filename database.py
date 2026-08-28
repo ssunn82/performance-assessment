@@ -68,6 +68,39 @@ class Database:
             )
         """)
 
+        # 生命周期字段迁移（存量库无损升级，列已存在时跳过）
+        try:
+            cursor.execute("ALTER TABLE assessment_sessions ADD COLUMN lifecycle TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE assessment_sessions ADD COLUMN lifecycle_prev TEXT")
+        except sqlite3.OperationalError:
+            pass
+        # 兜底：无 lifecycle 的存量会话按 status 推导（active→running，inactive→ended）
+        cursor.execute("""
+            UPDATE assessment_sessions
+            SET lifecycle = CASE WHEN status = 'active' THEN 'running' ELSE 'ended' END
+            WHERE lifecycle IS NULL OR lifecycle = ''
+        """)
+
+        # 打分历史快照表：管理员重置考核人时归档其原始打分记录
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS score_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                assessor_id INTEGER NOT NULL,
+                evaluatee_id INTEGER NOT NULL,
+                indicator_id INTEGER NOT NULL,
+                score REAL,
+                archived_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES assessment_sessions(id),
+                FOREIGN KEY (assessor_id) REFERENCES assessors(id),
+                FOREIGN KEY (evaluatee_id) REFERENCES evaluatees(id),
+                FOREIGN KEY (indicator_id) REFERENCES indicators(id)
+            )
+        """)
+
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS assessment_relations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -136,7 +169,7 @@ class Database:
         cursor.execute("SELECT COUNT(*) as cnt FROM assessment_sessions")
         if cursor.fetchone()['cnt'] == 0:
             cursor.execute(
-                "INSERT INTO assessment_sessions (name, quarter, status) VALUES (?, ?, 'active')",
+                "INSERT INTO assessment_sessions (name, quarter, status, lifecycle) VALUES (?, ?, 'active', 'running')",
                 ("2026年二季度中层考核", "2026-Q2")
             )
 
@@ -179,7 +212,7 @@ class Database:
         cursor = self.conn.cursor()
         cursor.execute("UPDATE assessment_sessions SET status = 'inactive'")
         cursor.execute(
-            "INSERT INTO assessment_sessions (name, quarter, status) VALUES (?, ?, 'active')",
+            "INSERT INTO assessment_sessions (name, quarter, status, lifecycle) VALUES (?, ?, 'active', 'draft')",
             (name, quarter)
         )
         self.conn.commit()
@@ -223,6 +256,99 @@ class Database:
         cursor.execute("DELETE FROM scores WHERE session_id = ?", (session_id,))
         cursor.execute("DELETE FROM assessment_relations WHERE session_id = ?", (session_id,))
         self.conn.commit()
+
+    # ========== 考核任务生命周期 ==========
+    # 状态机：draft(未启动) → testing(测试) / running(正式)；testing|running ⇄ paused；均可达 ended(终态)
+    LIFECYCLE_TRANSITIONS = {
+        "start_test": {"draft": "testing"},
+        "start": {"draft": "running", "testing": "running"},
+        "pause": {"testing": "paused", "running": "paused"},
+        "resume": {"paused": "running"},  # 实际恢复目标取 lifecycle_prev
+        "end": {"testing": "ended", "running": "ended", "paused": "ended"},
+    }
+
+    def get_session_lifecycle(self, session_id: int = None) -> str:
+        if session_id is None:
+            session = self.get_current_session()
+            return (session or {}).get('lifecycle') or 'draft'
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT lifecycle FROM assessment_sessions WHERE id = ?", (session_id,))
+        row = cursor.fetchone()
+        return (row['lifecycle'] if row else None) or 'draft'
+
+    def set_lifecycle(self, session_id: int, action: str, clear_scores: bool = False) -> Dict:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM assessment_sessions WHERE id = ?", (session_id,))
+        row = cursor.fetchone()
+        if not row:
+            return {"success": False, "message": "考核任务不存在"}
+        current = row['lifecycle'] or 'draft'
+
+        if action == "resume":
+            if current != 'paused':
+                return {"success": False, "message": "只有已暂停的考核才能恢复"}
+            target = row['lifecycle_prev'] or 'running'
+        else:
+            allowed = self.LIFECYCLE_TRANSITIONS.get(action)
+            if not allowed:
+                return {"success": False, "message": f"未知操作: {action}"}
+            target = allowed.get(current)
+            if not target:
+                return {"success": False, "message": "当前考核状态不允许该操作"}
+
+        prev_value = current if action == 'pause' else row['lifecycle_prev']
+        cursor.execute(
+            "UPDATE assessment_sessions SET lifecycle=?, lifecycle_prev=? WHERE id=?",
+            (target, prev_value, session_id)
+        )
+
+        cleared = 0
+        if action == 'start' and current == 'testing' and clear_scores:
+            cleared = self.clear_session_scores(session_id)
+        self.conn.commit()
+        return {"success": True, "lifecycle": target, "cleared_scores": cleared}
+
+    def clear_session_scores(self, session_id: int) -> int:
+        """清空某考核任务的全部打分数据（保留考核关系）"""
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM scores WHERE session_id = ?", (session_id,))
+        self.conn.commit()
+        return cursor.rowcount
+
+    # ========== 考核人打分重置 ==========
+    def reset_assessor(self, assessor_id: int, session_id: int = None) -> int:
+        """
+        重置考核人的提交状态：
+        1. 将其已提交的分数快照归档到 score_history（保留原打分记录）
+        2. 置 submitted=0 解锁，允许重新打分提交（旧分数保留为预填）
+        返回归档的记录条数
+        """
+        if session_id is None:
+            session_id = self.get_current_session_id()
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO score_history (session_id, assessor_id, evaluatee_id, indicator_id, score)
+            SELECT session_id, assessor_id, evaluatee_id, indicator_id, score
+            FROM scores
+            WHERE session_id=? AND assessor_id=? AND submitted=1
+        """, (session_id, assessor_id))
+        archived = cursor.rowcount
+        cursor.execute(
+            "UPDATE scores SET submitted=0 WHERE session_id=? AND assessor_id=?",
+            (session_id, assessor_id)
+        )
+        self.conn.commit()
+        return archived
+
+    def get_assessor_reset_count(self, assessor_id: int, session_id: int = None) -> int:
+        if session_id is None:
+            session_id = self.get_current_session_id()
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT COUNT(DISTINCT archived_at) as cnt FROM score_history
+            WHERE session_id=? AND assessor_id=?
+        """, (session_id, assessor_id))
+        return cursor.fetchone()['cnt']
 
     # ========== 系统设置 ==========
     def get_setting(self, key: str, default: str = "") -> str:
@@ -731,13 +857,16 @@ class Database:
             else:
                 status = "未开始"
 
+            reset_count = self.get_assessor_reset_count(a['id'], session_id)
+
             results.append({
                 "assessor_id": a['id'],
                 "assessor_name": a['name'],
                 "employee_id": a.get('employee_id'),
                 "total_evaluatees": total_evals,
                 "scored_evaluatees": scored_count,
-                "status": status
+                "status": status,
+                "reset_count": reset_count
             })
 
         return results

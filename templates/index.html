@@ -51,6 +51,57 @@
             </div>
         </div>
 
+        <!-- 考核任务生命周期控制 -->
+        {% set lc = (current_session.lifecycle if current_session else 'draft') or 'draft' %}
+        <div class="card lifecycle-card">
+            <div class="lifecycle-header">
+                <h2 style="margin:0;">考核任务状态</h2>
+                <span class="lifecycle-badge lc-{{ lc }}">
+                    {% if lc == 'draft' %}未启动
+                    {% elif lc == 'testing' %}测试模式
+                    {% elif lc == 'running' %}正式考核
+                    {% elif lc == 'paused' %}已暂停
+                    {% else %}已结束{% endif %}
+                </span>
+            </div>
+            <p class="hint" style="margin:10px 0;">
+                {% if lc == 'draft' %}考核配置完成后，可先启动测试模式验证流程，或直接正式启动。未启动时扫码无法进入打分。
+                {% elif lc == 'testing' %}测试模式下可正常扫码打分（打分页顶部有测试标识），正式启动时可选择清空或保留测试数据。
+                {% elif lc == 'running' %}考核进行中，考核人可正常扫码打分提交。
+                {% elif lc == 'paused' %}考核已暂停，扫码仅显示暂停提示，无法打分。恢复后可继续。
+                {% else %}考核已结束并锁定（不可恢复），扫码仅显示结束提示。如需再次考核请新建考核任务。{% endif %}
+            </p>
+            <div class="lifecycle-actions">
+                {% if lc == 'draft' %}
+                <button class="btn-primary" onclick="confirmStartTest()">启动测试</button>
+                <button class="btn-primary" onclick="confirmStartFromDraft()">正式启动</button>
+                {% elif lc == 'testing' %}
+                <button class="btn-primary" onclick="showStartConfirmModal()">正式启动</button>
+                <button class="btn-warn" onclick="confirmPause()">暂停</button>
+                <button class="btn-danger" onclick="confirmEnd()">结束</button>
+                {% elif lc == 'running' %}
+                <button class="btn-warn" onclick="confirmPause()">暂停</button>
+                <button class="btn-danger" onclick="confirmEnd()">结束</button>
+                {% elif lc == 'paused' %}
+                <button class="btn-primary" onclick="confirmResume()">恢复考核</button>
+                <button class="btn-danger" onclick="confirmEnd()">结束</button>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- 正式启动确认（测试模式转正式） -->
+        <div class="modal-overlay" id="start-confirm-modal" style="display:none;">
+            <div class="modal-content">
+                <h3>正式启动考核</h3>
+                <p class="hint">当前处于测试模式，正式启动前请选择测试期间打分数据的处理方式：</p>
+                <div class="modal-actions" style="flex-direction:column;">
+                    <button class="btn-primary" onclick="lifecycleAction('start', true)">清空测试数据并正式启动</button>
+                    <button class="btn-save" onclick="lifecycleAction('start', false)">保留测试数据并正式启动</button>
+                    <button class="btn-back" onclick="closeStartModal()">取消</button>
+                </div>
+            </div>
+        </div>
+
         <!-- 导航标签 -->
         <nav class="tabs">
             <button class="tab active" data-tab="assessors">考核人</button>
@@ -311,6 +362,7 @@
         </div>
     </div>
 
+    <script>const CURRENT_SESSION_ID = {{ current_session.id if current_session else 'null' }};</script>
     <script src="/static/js/main.js"></script>
 </body>
 </html>

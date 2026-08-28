@@ -59,6 +59,71 @@ document.getElementById('create-session-form').addEventListener('submit', async 
     }
 });
 
+// ========== 考核任务生命周期 ==========
+function showStartConfirmModal() {
+    document.getElementById('start-confirm-modal').style.display = 'flex';
+}
+
+function closeStartModal() {
+    document.getElementById('start-confirm-modal').style.display = 'none';
+}
+
+async function lifecycleAction(action, clearScores = false) {
+    if (!CURRENT_SESSION_ID) {
+        alert('未找到当前考核任务');
+        return;
+    }
+    const res = await fetch(`/api/sessions/${CURRENT_SESSION_ID}/lifecycle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: action, clear_scores: clearScores })
+    });
+    const data = await res.json().catch(() => ({}));
+    closeStartModal();
+    if (res.ok && data.success) {
+        let msg = '操作成功';
+        if (data.cleared_scores > 0) {
+            msg = `已正式启动，并清空测试打分数据 ${data.cleared_scores} 条`;
+        }
+        alert(msg);
+        location.reload();
+    } else {
+        alert('操作失败：' + (data.message || data.error || '未知错误'));
+    }
+}
+
+function confirmStartTest() {
+    if (confirm('确认启动测试模式？\n\n测试期间可正常扫码打分（打分页顶部会显示测试标识），正式启动时可选择清空测试数据。')) {
+        lifecycleAction('start_test');
+    }
+}
+
+function confirmStartFromDraft() {
+    if (confirm('确认正式启动考核？\n\n正式启动后，所有考核人即可扫码打分提交。')) {
+        lifecycleAction('start');
+    }
+}
+
+function confirmPause() {
+    if (confirm('确认暂停考核？\n\n暂停后扫码仅显示暂停提示，无法打分。可随时恢复。')) {
+        lifecycleAction('pause');
+    }
+}
+
+function confirmResume() {
+    if (confirm('确认恢复考核？\n\n恢复后考核人可继续扫码打分。')) {
+        lifecycleAction('resume');
+    }
+}
+
+function confirmEnd() {
+    if (confirm('⚠️ 确认结束考核？\n\n结束后考核将永久锁定，无法恢复，扫码仅显示结束提示。\n如需再次考核需新建考核任务。')) {
+        if (confirm('再次确认：结束后不可恢复，确定要结束吗？')) {
+            lifecycleAction('end');
+        }
+    }
+}
+
 // ========== 考核人 ==========
 document.getElementById('add-assessor-form').addEventListener('submit', async (e) => {
     e.preventDefault();

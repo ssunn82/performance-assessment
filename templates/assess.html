@@ -11,19 +11,40 @@
         <header class="assess-header">
             <h1>{{ session_name }}</h1>
             <p>考核人：<strong>{{ assessor.name }}</strong></p>
-            {% if completed %}
+            {% if lock_message %}
+            <div class="status-badge status-locked">{{ lock_label }}</div>
+            {% elif completed %}
             <div class="status-badge status-completed">考核已完成</div>
             {% else %}
             <div class="status-badge status-pending">考核进行中</div>
             {% endif %}
         </header>
 
-        {% if completed %}
+        {% if lock_message %}
+        <!-- 考核未启动/暂停/结束：状态锁定提示页 -->
+        <div class="card status-lock-card">
+            <div class="lock-icon-circle">
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="4" y="11" width="16" height="9" rx="2"></rect>
+                    <path d="M8 11V8a4 4 0 0 1 8 0v3"></path>
+                </svg>
+            </div>
+            <h2>{{ lock_label }}</h2>
+            <p>{{ lock_message }}</p>
+        </div>
+        {% elif completed %}
         <div class="card completed-message">
             <h2>感谢您的参与</h2>
             <p>您的考核评分已全部提交完成，无法再修改。</p>
         </div>
         {% else %}
+
+        {% if is_testing %}
+        <div class="test-mode-banner">
+            <span class="test-mode-dot"></span>
+            测试模式：当前为系统测试阶段，正式考核启动前数据可被管理员清空
+        </div>
+        {% endif %}
 
         <!-- 被考核人列表区域 -->
         <div class="card" id="evaluatee-list-card">
