@@ -102,8 +102,9 @@
                         <td data-label="操作">
                             {% if p.status == '已完成' %}
                             <button class="btn-reset" onclick="resetAssessor({{ p.assessor_id }}, '{{ p.assessor_name }}')">重置打分</button>
-                            {% else %}
-                            <span class="hint">-</span>
+                            {% endif %}
+                            {% if p.reset_count > 0 %}
+                            <button class="btn-reset btn-history" onclick="viewHistory({{ p.assessor_id }}, '{{ p.assessor_name }}')">查看记录</button>
                             {% endif %}
                         </td>
                     </tr>
@@ -115,6 +116,19 @@
             <p class="hint">暂无考核人数据。请先在管理后台导入考核关系。</p>
             {% endif %}
             <p class="hint" style="margin-top:12px;">「重置打分」会将该考核人的提交状态解锁（原打分记录自动归档保留），其重新扫码后可看到旧分数并修改后重新提交。重置次数计入「重置」列。</p>
+        </div>
+    </div>
+
+    <!-- 归档记录查看弹窗 -->
+    <div class="modal-overlay" id="history-modal" style="display:none;">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3 id="history-title">归档打分记录</h3>
+                <button class="modal-close" onclick="closeHistory()" aria-label="关闭">&times;</button>
+            </div>
+            <div class="modal-body" id="history-body">
+                <p class="hint">加载中…</p>
+            </div>
         </div>
     </div>
 
@@ -134,6 +148,77 @@
                 alert('重置失败：' + (data.message || data.error || '未知错误'));
             }
         }
+
+        // ========== 归档记录查看 ==========
+        async function viewHistory(assessorId, name) {
+            const modal = document.getElementById('history-modal');
+            const body = document.getElementById('history-body');
+            document.getElementById('history-title').textContent = name + ' - 归档打分记录';
+            body.innerHTML = '<p class="hint">加载中…</p>';
+            modal.style.display = 'flex';
+            document.body.style.overflow = 'hidden';
+
+            const res = await fetch('/api/scores/' + assessorId + '/history');
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data.success) {
+                body.innerHTML = '<p class="hint">加载失败：' + (data.message || data.error || '未知错误') + '</p>';
+                return;
+            }
+            if (!data.batches || data.batches.length === 0) {
+                body.innerHTML = '<p class="hint">该考核人暂无归档记录。</p>';
+                return;
+            }
+            let html = '';
+            data.batches.forEach(function(batch, idx) {
+                html += '<div class="history-batch">'
+                    + '<div class="history-batch-title">第 ' + (data.batches.length - idx) + ' 次提交（重置于 ' + formatTime(batch.archived_at) + '）</div>'
+                    + '<div class="table-wrapper"><table class="data-table history-table"><thead><tr>'
+                    + '<th>被考核人</th><th>工号</th><th>指标</th><th>分数</th><th>加权合计</th>'
+                    + '</tr></thead><tbody>';
+                batch.evaluatees.forEach(function(ev) {
+                    ev.indicators.forEach(function(ind, i) {
+                        html += '<tr>'
+                            + (i === 0 ? '<td rowspan="' + ev.indicators.length + '" data-label="被考核人">' + escapeHtml(ev.evaluatee_name) + '</td>'
+                                        + '<td rowspan="' + ev.indicators.length + '" data-label="工号">' + escapeHtml(ev.employee_id || '-') + '</td>' : '')
+                            + '<td data-label="指标">' + escapeHtml(ind.indicator_name)
+                            + ' <span class="history-meta">权重 ' + Math.round(ind.indicator_weight * 100) + '%</span></td>'
+                            + '<td data-label="分数">' + (ind.score === null ? '-' : ind.score) + '</td>'
+                            + (i === 0 ? '<td rowspan="' + ev.indicators.length + '" data-label="加权合计"><strong>' + ev.weighted_total + '</strong></td>' : '')
+                            + '</tr>';
+                    });
+                });
+                html += '</tbody></table></div></div>';
+            });
+            body.innerHTML = html;
+        }
+
+        function formatTime(ts) {
+            if (!ts) return '-';
+            // SQLite CURRENT_TIMESTAMP 为 UTC，转本地时间显示
+            const d = new Date(ts.replace(' ', 'T') + 'Z');
+            if (isNaN(d.getTime())) return ts;
+            const p = n => String(n).padStart(2, '0');
+            return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+                + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+        }
+
+        function escapeHtml(s) {
+            return String(s == null ? '' : s).replace(/[&<>"']/g,
+                c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        }
+
+        function closeHistory() {
+            document.getElementById('history-modal').style.display = 'none';
+            document.body.style.overflow = '';
+        }
+
+        // 点击遮罩或 ESC 关闭
+        document.getElementById('history-modal').addEventListener('click', function(e) {
+            if (e.target === this) closeHistory();
+        });
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') closeHistory();
+        });
     </script>
 </body>
 </html>

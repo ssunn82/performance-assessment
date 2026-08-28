@@ -350,6 +350,61 @@ class Database:
         """, (session_id, assessor_id))
         return cursor.fetchone()['cnt']
 
+    def get_score_history(self, assessor_id: int, session_id: int = None) -> List[Dict]:
+        """
+        按归档批次返回某考核人的历史打分记录（每次管理员重置归档为一批，最新在前）
+        每批内按被考核人分组，附各指标分数与加权合计
+        """
+        if session_id is None:
+            session_id = self.get_current_session_id()
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT sh.archived_at, sh.score, sh.evaluatee_id,
+                   e.name as evaluatee_name, e.employee_id as evaluatee_employee_id,
+                   i.name as indicator_name, i.weight as indicator_weight, i.max_score
+            FROM score_history sh
+            JOIN evaluatees e ON sh.evaluatee_id = e.id
+            JOIN indicators i ON sh.indicator_id = i.id
+            WHERE sh.session_id=? AND sh.assessor_id=?
+            ORDER BY sh.archived_at DESC, sh.evaluatee_id, sh.indicator_id
+        """, (session_id, assessor_id))
+        rows = [dict(r) for r in cursor.fetchall()]
+
+        batches = []
+        batch_map = {}
+        for r in rows:
+            key = r['archived_at']
+            if key not in batch_map:
+                batch = {"archived_at": key, "evaluatees": {}}
+                batch_map[key] = batch
+                batches.append(batch)
+            batch = batch_map[key]
+            eid = r['evaluatee_id']
+            if eid not in batch['evaluatees']:
+                batch['evaluatees'][eid] = {
+                    "evaluatee_id": eid,
+                    "evaluatee_name": r['evaluatee_name'],
+                    "employee_id": r['evaluatee_employee_id'],
+                    "indicators": [],
+                    "weighted_total": 0
+                }
+            entry = batch['evaluatees'][eid]
+            entry['indicators'].append({
+                "indicator_name": r['indicator_name'],
+                "score": r['score'],
+                "indicator_weight": r['indicator_weight'],
+                "max_score": r['max_score']
+            })
+            if r['score'] is not None:
+                entry['weighted_total'] += r['score'] * r['indicator_weight']
+
+        # dict -> list，加权合计取整到 2 位
+        for batch in batches:
+            batch['evaluatees'] = list(batch['evaluatees'].values())
+            for ev in batch['evaluatees']:
+                ev['weighted_total'] = round(ev['weighted_total'], 2)
+        return batches
+
     # ========== 系统设置 ==========
     def get_setting(self, key: str, default: str = "") -> str:
         cursor = self.conn.cursor()

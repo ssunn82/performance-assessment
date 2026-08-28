@@ -514,6 +514,26 @@ async def reset_assessor_scores(request: Request, assessor_id: int):
     }
 
 
+@app.get("/api/scores/{assessor_id}/history", response_class=JSONResponse)
+async def get_score_history(request: Request, assessor_id: int):
+    """查看某考核人的历史归档打分记录（每次重置为一批，仅管理员）"""
+    if not is_logged_in(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+    db = get_db()
+    assessors = db.get_all_assessors()
+    assessor = next((a for a in assessors if a['id'] == assessor_id), None)
+    if not assessor:
+        return JSONResponse({"success": False, "message": "考核人不存在"}, status_code=404)
+
+    batches = db.get_score_history(assessor_id)
+    return {
+        "success": True,
+        "assessor_name": assessor['name'],
+        "reset_count": db.get_assessor_reset_count(assessor_id),
+        "batches": batches
+    }
+
+
 # ==================== 设置 API ====================
 @app.get("/api/settings", response_class=JSONResponse)
 async def get_settings(request: Request):

@@ -1330,3 +1330,119 @@ header {
     .lifecycle-actions button { flex: 1; min-height: 44px; }
     .status-lock-card { padding: 36px 16px; }
 }
+
+/* ========== 归档记录查看弹窗 ========== */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 16px;
+}
+
+.modal-dialog {
+    background: white;
+    border-radius: var(--radius);
+    width: 100%;
+    max-width: 760px;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--gray-200, #e5e7eb);
+}
+
+.modal-header h3 {
+    margin: 0;
+    font-size: 1.1rem;
+    color: var(--gray-800, #1f2937);
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    font-size: 1.6rem;
+    line-height: 1;
+    color: var(--gray-600, #4b5563);
+    cursor: pointer;
+    padding: 4px 8px;
+    min-height: 36px;
+    min-width: 36px;
+    border-radius: var(--radius);
+}
+
+.modal-close:hover { background: #f1f5f9; }
+
+.modal-body {
+    padding: 16px 20px;
+    overflow-y: auto;
+}
+
+.history-batch {
+    margin-bottom: 20px;
+}
+
+.history-batch:last-child { margin-bottom: 4px; }
+
+.history-batch-title {
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: var(--gray-700, #374151);
+    margin-bottom: 8px;
+    padding-left: 10px;
+    border-left: 3px solid var(--warning-color, #d97706);
+}
+
+.history-table td, .history-table th {
+    font-size: 0.9rem;
+}
+
+.history-meta {
+    color: var(--gray-500, #6b7280);
+    font-size: 0.8rem;
+}
+
+.btn-history {
+    color: var(--primary-color, #2563eb);
+    border-color: var(--primary-color, #2563eb);
+    margin-top: 6px;
+}
+
+.btn-history:hover { background: #eff6ff; }
+
+@media (max-width: 768px) {
+    .modal-overlay { padding: 10px; align-items: flex-end; }
+    .modal-dialog { max-height: 92vh; }
+    .modal-header, .modal-body { padding: 12px 14px; }
+    /* 手机上指标合并为单列卡片式 */
+    .history-table thead { display: none; }
+    .history-table tr { display: block; border-bottom: 1px solid var(--gray-200, #e5e7eb); padding: 8px 0; }
+    .history-table td {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border: none;
+        padding: 3px 4px;
+        text-align: right;
+        min-height: 30px;
+    }
+    .history-table td::before {
+        content: attr(data-label);
+        font-weight: 600;
+        color: var(--gray-600, #4b5563);
+        margin-right: 12px;
+        text-align: left;
+    }
+    .history-table td[rowspan] { display: none; }
+    .history-table td[rowspan]::before { display: none; }
+}
