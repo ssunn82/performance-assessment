@@ -1311,6 +1311,27 @@ header {
 
 .btn-reset:hover { background: #fefce8; }
 
+/* 二维码页签：重置链接按钮（作废已外泄的扫码链接） */
+.btn-reset-link {
+    display: block;
+    width: 100%;
+    margin-top: 6px;
+    background: white;
+    color: var(--gray-600);
+    border: 1px solid var(--gray-300, #d1d5db);
+    border-radius: var(--radius);
+    padding: 4px 8px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    min-height: 28px;
+}
+
+.btn-reset-link:hover {
+    background: #f9fafb;
+    border-color: var(--gray-400, #9ca3af);
+    color: var(--gray-700, #374151);
+}
+
 .badge-reset {
     display: inline-block;
     margin-left: 6px;

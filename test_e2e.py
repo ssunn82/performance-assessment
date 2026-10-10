@@ -394,6 +394,76 @@ d2 = r.json()
 test('History empty for no-reset assessor', r.status_code == 200 and d2.get('success')
      and len(d2.get('batches', [])) == 0)
 
+# ========== 访问令牌安全测试（防 IDOR）============
+# 原实现用自增 id 作为打分链接，改 URL 数字即可进他人页面并覆盖分数。
+# 现改为不可猜测随机令牌，此处验证越权确实被拦得住。
+_anon2 = requests.Session()  # 未登录的全新会话
+
+# 取考核人1 的令牌：借助已登录的管理员会话读二维码导出表中的「扫码链接」列
+r = session.get(f'{BASE}/api/export/qrcodes')
+_wb = openpyxl.load_workbook(BytesIO(r.content))
+_ws = _wb.active
+_tok1 = None
+_row2 = 2
+while _row2 <= _ws.max_row:
+    _nm = _ws.cell(row=_row2, column=1).value
+    _url = _ws.cell(row=_row2, column=4).value or ''
+    if _nm == '张三' and '/s/' in str(_url):
+        _tok1 = str(_url).split('/s/')[-1].strip()
+        break
+    _row2 += 1
+test('Token exported in QR sheet', bool(_tok1) and len(_tok1) >= 32,
+     f"token_len={len(_tok1) if _tok1 else 0}")
+
+# 1) 令牌版链接可正常访问
+r = _anon2.get(f'{BASE}/s/{_tok1}')
+test('Token URL opens assess page', r.status_code == 200 and '考核' in r.text)
+
+# 2) 伪造令牌应被拒绝（返回错误页而非打分表单）
+r = _anon2.get(f'{BASE}/s/deadbeefdeadbeefdeadbeefdeadbeef')
+test('Fake token rejected', '失效' in r.text and 'data-indicator-id' not in r.text,
+     f'status={r.status_code}')
+
+# 3) 旧的 id 直链（无令牌、未登录）应被拒绝 —— 这就是原漏洞
+r = _anon2.get(f'{BASE}/assess/1')
+test('ID-only URL blocked (IDOR fixed)',
+     '失效' in r.text and 'data-indicator-id' not in r.text, f'status={r.status_code}')
+
+# 4) 令牌与 id 不匹配（拿1号的令牌访问2号）应被拒绝
+r = _anon2.get(f'{BASE}/assess/2?t={_tok1}')
+test('Token mismatch blocked', '失效' in r.text and 'data-indicator-id' not in r.text,
+     f'status={r.status_code}')
+
+# 5) 未登录直接调打分接口应 403
+r = _anon2.post(f'{BASE}/api/scores/1/batch', json={
+    'evaluatee_id': 1, 'scores': [{'indicator_id': 1, 'score': 99}]
+})
+test('Unauthenticated score API blocked', r.status_code == 403, f'status={r.status_code}')
+
+# 6) 未登录直接调提交接口应 403
+r = _anon2.post(f'{BASE}/api/scores/1/submit')
+test('Unauthenticated submit blocked', r.status_code == 403, f'status={r.status_code}')
+
+# 7) 非登录用户带正确令牌可打分（正常扫码路径）
+#    注意：需先重置该考核人，否则若其已提交则会被「考核已完成」拦下（400）
+session.post(f'{BASE}/api/scores/1/reset')
+r = _anon2.post(f'{BASE}/api/scores/1/batch',
+                headers={'X-Access-Token': _tok1},
+                json={'evaluatee_id': 1,
+                      'scores': [{'indicator_id': int(i), 'score': 86} for i in ind_ids[:1]]})
+test('Token allows scoring', r.status_code == 200, f'status={r.status_code}, resp={r.text[:150]}')
+
+# 8) 重置令牌后旧令牌立即失效
+_r = session.post(f'{BASE}/api/qrcode/1/reset')
+test('Reset token API works', _r.status_code == 200 and _r.json().get('success'),
+     f'status={_r.status_code}')
+_new_tok = _r.json().get('url', '').split('/s/')[-1]
+test('Reset returns new token', bool(_new_tok) and _new_tok != _tok1)
+r = _anon2.get(f'{BASE}/s/{_tok1}')
+test('Old token invalid after reset', '失效' in r.text, f'status={r.status_code}')
+r = _anon2.get(f'{BASE}/s/{_new_tok}')
+test('New token works after reset', r.status_code == 200 and '考核' in r.text)
+
 # L13. 结束考核（不可逆）
 r = session.post(f'{BASE}/api/sessions/{lt_sid}/lifecycle', json={'action': 'end'})
 test('End session', r.status_code == 200 and r.json().get('lifecycle') == 'ended')

@@ -341,3 +341,21 @@ document.getElementById('change-password-form').addEventListener('submit', async
         alert(data.message || '修改失败');
     }
 });
+
+// ========== 重置二维码链接（作废已外泄的链接）============
+document.querySelectorAll('.btn-reset-link').forEach(btn => {
+    btn.addEventListener('click', async () => {
+        const assessorId = btn.dataset.assessorId;
+        if (!confirm('确认重置该考核人的二维码链接？\n\n旧链接（含已拍照或转发出去的）将立即失效，需重新导出分发。')) {
+            return;
+        }
+        const res = await fetch('/api/qrcode/' + assessorId + '/reset', { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.success) {
+            alert('已重置，旧链接失效。页面即将刷新以显示新二维码。');
+            location.reload();
+        } else {
+            alert(data.message || data.error || '重置失败');
+        }
+    });
+});

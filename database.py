@@ -41,8 +41,29 @@ class Database:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 employee_id TEXT UNIQUE,
                 name TEXT NOT NULL,
+                access_token TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
+        """)
+
+        # 迁移：为存量考核人补 access_token 列（列已存在时跳过）
+        try:
+            cursor.execute("ALTER TABLE assessors ADD COLUMN access_token TEXT")
+        except sqlite3.OperationalError:
+            pass
+
+        # 为 access_token 为空的存量考核人生成随机令牌（32位十六进制，128位熵）
+        # 不使用自增 id 推算，避免他人通过改 URL 数字枚举他人打分链接
+        cursor.execute("SELECT id FROM assessors WHERE access_token IS NULL OR access_token = ''")
+        for (aid,) in cursor.fetchall():
+            cursor.execute(
+                "UPDATE assessors SET access_token = ? WHERE id = ?",
+                (secrets.token_hex(16), aid)
+            )
+        # 保证新建考核人也自带随机令牌
+        cursor.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_assessors_token
+            ON assessors(access_token)
         """)
 
         cursor.execute("""
@@ -183,6 +204,46 @@ class Database:
             )
 
         self.conn.commit()
+
+    # ========== 考核链接令牌（防止枚举他人打分链接）============
+    def get_assessor_by_token(self, token: str) -> Optional[Dict]:
+        """凭访问令牌定位考核人；令牌无效返回 None"""
+        if not token or len(token) < 16:
+            return None
+        cursor = self.conn.cursor()
+        # 参数化查询，杜绝 SQL 注入
+        cursor.execute("SELECT * FROM assessors WHERE access_token = ?", (token,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def get_assessor_token(self, assessor_id: int) -> Optional[str]:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT access_token FROM assessors WHERE id = ?", (assessor_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        tok = row['access_token']
+        if not tok:
+            # 兜底：极端情况下补生成，保证链接始终可用
+            tok = secrets.token_hex(16)
+            cursor.execute("UPDATE assessors SET access_token = ? WHERE id = ?", (tok, assessor_id))
+            self.conn.commit()
+        return tok
+
+    def reset_assessor_token(self, assessor_id: int) -> Optional[str]:
+        """重置某考核人的访问令牌（旧链接立即失效），返回新令牌"""
+        new_token = secrets.token_hex(16)
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "UPDATE assessors SET access_token = ? WHERE id = ?",
+            (new_token, assessor_id)
+        )
+        self.conn.commit()
+        return new_token if cursor.rowcount > 0 else None
+
+    def ensure_assessor_token(self, assessor_id: int) -> Optional[str]:
+        """确保某考核人已有令牌（新建/导入时调用）"""
+        return self.get_assessor_token(assessor_id)
 
     # ========== 登录认证 ==========
     def verify_admin(self, username: str, password: str) -> bool:
@@ -434,8 +495,8 @@ class Database:
                 self.conn.commit()
                 return existing['id']
         cursor.execute(
-            "INSERT INTO assessors (name, employee_id) VALUES (?, ?)",
-            (name, employee_id)
+            "INSERT INTO assessors (name, employee_id, access_token) VALUES (?, ?, ?)",
+            (name, employee_id, secrets.token_hex(16))
         )
         self.conn.commit()
         return cursor.lastrowid
@@ -476,8 +537,8 @@ class Database:
                 updated += 1
             else:
                 cursor.execute(
-                    "INSERT INTO assessors (name, employee_id) VALUES (?,?)",
-                    (str(name), str(emp_id))
+                    "INSERT INTO assessors (name, employee_id, access_token) VALUES (?,?,?)",
+                    (str(name), str(emp_id), secrets.token_hex(16))
                 )
                 created += 1
         self.conn.commit()

@@ -298,16 +298,20 @@
                 <div class="import-section">
                     <a href="/api/export/qrcodes" class="btn-submit">导出二维码Excel</a>
                 </div>
-                <p class="hint" style="margin-top:12px;">为每个考核人生成专属二维码，扫码后进入打分界面。</p>
+                <p class="hint" style="margin-top:12px;">
+ 为每个考核人生成专属二维码，扫码后进入打分界面。
+ 每条链接含随机访问令牌，无法通过改动网址推算出他人链接；如二维码外泄，可点「重置链接」作废。
+</p>
                 {% if not assessors %}
                 <p class="hint">请先添加考核人。</p>
                 {% endif %}
                 <div class="qrcode-grid">
                     {% for a in assessors %}
                     <div class="qrcode-item">
-                        <img src="/api/qrcode/{{ a.id }}" alt="{{ a.name }}" class="qrcode-img">
+                        <img src="/api/qrcode/{{ a.id }}?v={{ a.access_token[:8] if a.access_token else '' }}" alt="{{ a.name }}" class="qrcode-img">
                         <p>{{ a.name }}</p>
-                        <a href="/assess/{{ a.id }}" class="btn-download" target="_blank">预览打分页</a>
+                        <a href="/s/{{ a.access_token }}" class="btn-download" target="_blank">预览打分页</a>
+                        <button class="btn-reset-link" data-assessor-id="{{ a.id }}">重置链接</button>
                     </div>
                     {% endfor %}
                 </div>

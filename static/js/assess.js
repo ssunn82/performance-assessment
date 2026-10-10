@@ -109,7 +109,7 @@ async function saveCurrentScores(silent = false) {
     try {
         const res = await fetch('/api/scores/' + ASSESSOR_ID + '/batch', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-Access-Token': ACCESS_TOKEN },
             body: JSON.stringify({
                 evaluatee_id: evaluateeId,
                 scores: scores
@@ -189,7 +189,7 @@ async function submitAllScores() {
             if (scores.length > 0) {
                 await fetch('/api/scores/' + ASSESSOR_ID + '/batch', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'X-Access-Token': ACCESS_TOKEN },
                     body: JSON.stringify({ evaluatee_id: parseInt(evalId), scores: scores })
                 });
                 if (!SCORE_MAP[evalId]) SCORE_MAP[evalId] = {};
@@ -219,7 +219,8 @@ async function submitAllScores() {
 
     try {
         const res = await fetch('/api/scores/' + ASSESSOR_ID + '/submit', {
-            method: 'POST'
+            method: 'POST',
+            headers: { 'X-Access-Token': ACCESS_TOKEN }
         });
 
         const data = await res.json().catch(() => ({}));

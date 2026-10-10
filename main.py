@@ -118,6 +118,29 @@ def _base_url(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
+# ==================== 考核链接访问令牌 ====================
+# 安全背景：原实现用自增主键 /assess/{id} 作为打分入口，任何人把 URL 数字
+# 改一下就能进入他人打分页并覆盖分数（IDOR）。现改为不可猜测的随机令牌，
+# 且令牌可用「重置二维码」作废旧链接。
+
+def _verify_assessor_access(request: Request, db, assessor_id: int) -> bool:
+    """校验请求方是否有权操作该考核人的打分。
+
+    通过方式（二选一）：
+      1. 携带该考核人的 access_token（扫码进入的正常路径）
+      2. 已登录管理后台（管理员本人在后台预览/代操作，便于内部调试）
+    令牌来自请求头 X-Access-Token 或查询参数 t。
+    """
+    if is_logged_in(request):
+        return True
+    token = request.headers.get("X-Access-Token") or request.query_params.get("t")
+    if not token:
+        return False
+    row = db.get_assessor_by_token(token)
+    # 令牌必须属于「该」考核人，否则视为越权
+    return bool(row) and row["id"] == assessor_id
+
+
 # ==================== 登录/登出 ====================
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
@@ -172,6 +195,39 @@ async def index(request: Request):
 
 @app.get("/assess/{assessor_id}", response_class=HTMLResponse)
 async def assess_page(request: Request, assessor_id: int):
+    """兼容入口：仍用 id 定位，但必须提供有效令牌，否则拒绝。
+
+    仅管理员登录态可无令牌访问（后台预览用）。
+    """
+    db = get_db()
+    token = request.headers.get("X-Access-Token") or request.query_params.get("t")
+    if not is_logged_in(request):
+        if not token:
+            return templates.TemplateResponse(request, "error.html", {
+                "message": "链接无效或已失效，请使用最新的二维码重新扫码"
+            })
+        row = db.get_assessor_by_token(token)
+        if not row or row["id"] != assessor_id:
+            # 令牌无效，或令牌与 URL 中的 id 不匹配（试图改 id 访问他人）
+            return templates.TemplateResponse(request, "error.html", {
+                "message": "链接无效或已失效，请使用最新的二维码重新扫码"
+            })
+    return await _render_assess_page(request, assessor_id, token)
+
+
+@app.get("/s/{token}", response_class=HTMLResponse)
+async def assess_by_token(request: Request, token: str):
+    """令牌版打分入口（二维码实际指向的地址）：不可猜测、可重置作废"""
+    db = get_db()
+    row = db.get_assessor_by_token(token)
+    if not row:
+        return templates.TemplateResponse(request, "error.html", {
+            "message": "链接无效或已失效，请联系管理员重新获取二维码"
+        })
+    return await _render_assess_page(request, row["id"], token)
+
+
+async def _render_assess_page(request: Request, assessor_id: int, token: str):
     db = get_db()
     session_id = db.get_current_session_id()
     assessors = db.get_all_assessors()
@@ -200,6 +256,7 @@ async def assess_page(request: Request, assessor_id: int):
             "evaluatee_scores": {},
             "completed": False,
             "instruction": "",
+            "access_token": token,
         })
 
     completed = db.is_assessor_completed(assessor_id, session_id)
@@ -227,6 +284,7 @@ async def assess_page(request: Request, assessor_id: int):
         "instruction": db.get_setting("assess_instruction", ""),
         "session_name": session['name'] if session else "考核",
         "is_testing": lifecycle == 'testing',
+        "access_token": token,
     })
 
 
@@ -430,8 +488,11 @@ async def delete_indicator(request: Request, indicator_id: int):
 
 # ==================== 打分 API ====================
 @app.post("/api/scores/{assessor_id}/batch", response_class=JSONResponse)
-async def batch_save_scores(assessor_id: int, req: ScoreBatchSave):
+async def batch_save_scores(request: Request, assessor_id: int, req: ScoreBatchSave):
     db = get_db()
+    # 校验访问令牌：防止他人改 URL 中的 id 冒充他人打分（IDOR）
+    if not _verify_assessor_access(request, db, assessor_id):
+        return JSONResponse({"error": "链接无效或已失效，请重新扫码"}, status_code=403)
     session_id = db.get_current_session_id()
     lifecycle = db.get_session_lifecycle(session_id)
     if lifecycle not in ('testing', 'running'):
@@ -462,8 +523,11 @@ async def batch_save_scores(assessor_id: int, req: ScoreBatchSave):
 
 
 @app.post("/api/scores/{assessor_id}/submit", response_class=JSONResponse)
-async def submit_scores(assessor_id: int):
+async def submit_scores(request: Request, assessor_id: int):
     db = get_db()
+    # 校验访问令牌：防止他人越权提交他人考核结果
+    if not _verify_assessor_access(request, db, assessor_id):
+        return JSONResponse({"error": "链接无效或已失效，请重新扫码"}, status_code=403)
     session_id = db.get_current_session_id()
     lifecycle = db.get_session_lifecycle(session_id)
     if lifecycle not in ('testing', 'running'):
@@ -561,7 +625,9 @@ async def generate_qrcode(request: Request, assessor_id: int):
     if not assessor:
         raise HTTPException(status_code=404, detail="考核人不存在")
 
-    qr_url = f"{_base_url(request)}/assess/{assessor_id}"
+    # 二维码内容为不可猜测的令牌地址（/s/<token>），而非自增 id
+    token = db.ensure_assessor_token(assessor_id)
+    qr_url = f"{_base_url(request)}/s/{token}"
     qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_H,
                        box_size=10, border=4)
     qr.add_data(qr_url)
@@ -572,6 +638,22 @@ async def generate_qrcode(request: Request, assessor_id: int):
     img.save(buf, format='PNG')
     buf.seek(0)
     return Response(content=buf.read(), media_type="image/png")
+
+
+@app.post("/api/qrcode/{assessor_id}/reset", response_class=JSONResponse)
+async def reset_qrcode_token(request: Request, assessor_id: int):
+    """重置某考核人的二维码令牌：旧链接（含已泄露/已拍照的）立即失效"""
+    if not is_logged_in(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+    db = get_db()
+    new_token = db.reset_assessor_token(assessor_id)
+    if not new_token:
+        return JSONResponse({"error": "考核人不存在"}, status_code=404)
+    return {
+        "success": True,
+        "message": "二维码已重置，旧链接立即失效，请重新导出并分发",
+        "url": f"{_base_url(request)}/s/{new_token}",
+    }
 
 
 # ==================== Excel 导入 ====================
@@ -901,7 +983,8 @@ async def export_qrcodes(request: Request):
         ws.cell(row=idx, column=1, value=a['name']).border = border
         ws.cell(row=idx, column=2, value=a.get('employee_id') or "").border = border
 
-        qr_url = f"{base}/assess/{a['id']}"
+        token = db.ensure_assessor_token(a['id'])
+        qr_url = f"{base}/s/{token}"
         ws.cell(row=idx, column=4, value=qr_url).border = border
 
         qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_H,

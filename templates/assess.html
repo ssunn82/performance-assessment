@@ -138,6 +138,8 @@
 
     <script>
         const ASSESSOR_ID = {{ assessor.id }};
+        // 访问令牌：防止他人改 URL 中的 id 冒充他人打分/提交
+        const ACCESS_TOKEN = "{{ access_token or '' }}";
         const RELATIONS = {{ relations | tojson }};
         const INDICATORS = {{ indicators | tojson }};
         const SCORE_MAP = {{ score_map | tojson }};
