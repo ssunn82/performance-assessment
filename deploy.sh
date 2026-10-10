@@ -17,7 +17,10 @@ set -e
 APP_DIR="/opt/performance_assessment"
 SERVICE_NAME="perf-assessment"
 PORT="${PORT:-8000}"              # 内部 gunicorn 端口，不对外开放
-PUBLIC_PORT="${PUBLIC_PORT:-8851}" # 对外 nginx 监听端口
+PUBLIC_PORT="${PUBLIC_PORT:-8851}" # 对外 nginx 监听端口（纯端口访问模式）
+# 外部访问地址：影响二维码/Excel 中的扫码链接。
+# 配了域名反代时务必设置为 https://kaohe.你的域名.com，否则扫码方在外网打不开。
+BASE_URL="${BASE_URL:-}"
 
 echo "==> [1/7] 安装系统依赖 (python3-venv, nginx)"
 sudo apt-get update
@@ -51,6 +54,7 @@ WorkingDirectory=${APP_DIR}
 Environment=SESSION_SECRET_KEY=${SESSION_SECRET_KEY}
 Environment=BIND=127.0.0.1
 Environment=PORT=${PORT}
+Environment=BASE_URL=${BASE_URL}
 ExecStart=${APP_DIR}/venv/bin/gunicorn -c ${APP_DIR}/gunicorn.conf.py main:app
 Restart=always
 RestartSec=3
@@ -93,3 +97,14 @@ echo "   2) 浏览器打开 http://<公网IP>:${PUBLIC_PORT} 登录后立即修�
 echo "   3) 用 Excel 模板录入考核人 / 被考核人 / 指标，或手动在后台添加"
 echo ""
 echo "ℹ️ 应用内部端口 ${PORT} 仅监听 127.0.0.1，无需在控制台放行。"
+if [ -n "$BASE_URL" ]; then
+  echo "ℹ️ 已固定扫码链接前缀为: ${BASE_URL}（二维码与导出的链接都会用它）"
+else
+  echo ""
+  echo "⚠️  未设置 BASE_URL：二维码里的链接会带本机 IP/端口。"
+  echo "   若考核人从外网扫码，将无法访问。建议重新部署时带上："
+  echo "   sudo BASE_URL=https://kaohe.你的域名.com ./deploy.sh"
+  echo "   或纯端口访问时用：http://<公网IP>:${PUBLIC_PORT}"
+fi
+echo ""
+echo "ℹ️ 想让考核人直接输入域名（无需带端口）访问，见 nginx-domain.conf 模板。"
