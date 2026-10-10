@@ -11,6 +11,8 @@ set -e
 
 APP_DIR="/opt/performance_assessment"
 SERVICE_NAME="perf-assessment"
+# 对外访问端口（nginx），健康检查必须打这个端口；应用内部 8000 不对外开放
+PUBLIC_PORT="${PUBLIC_PORT:-8851}"
 cd "$APP_DIR"
 
 echo "==> [1/4] 备份当前数据库（含 WAL/SHM）"
@@ -37,11 +39,11 @@ sudo systemctl restart "$SERVICE_NAME"
 sleep 2
 
 echo "==> [4/4] 健康检查"
-CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost || true)
-echo "   本地 HTTP 状态: ${CODE:-无响应}"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${PUBLIC_PORT}" || true)
+echo "   本地 HTTP 状态（:${PUBLIC_PORT}）: ${CODE:-无响应}"
 
 echo ""
 echo "✅ 更新完成！"
-echo "   公网访问: http://<服务器公网IP>"
+echo "   公网访问: http://<服务器公网IP>:${PUBLIC_PORT}"
 echo "   若状态码非 200，请查日志: journalctl -u $SERVICE_NAME -n 50 --no-pager"
 echo "   如需回滚: 用 data_v2.db.bak 等替换原文件后 sudo systemctl restart $SERVICE_NAME"

@@ -4,8 +4,11 @@ gunicorn 生产配置
 """
 import os
 
-# 监听地址与端口（与 nginx 反代、防火墙端口一致）
-bind = "0.0.0.0:" + os.getenv("PORT", "8000")
+# 监听地址与端口
+# 说明：nginx 对外监听 8851，gunicorn 只在本地回环监听 8000，公网无法直连应用端口。
+# 若不使用 nginx（直接对外暴露 gunicorn），需将 BIND 改为 0.0.0.0 并放行对应端口。
+BIND = os.getenv("BIND", "127.0.0.1")
+bind = BIND + ":" + os.getenv("PORT", "8000")
 
 # Worker 数量：轻量服务器 2核2G 建议 2；公式 (2 x CPU) + 1 可自行调整
 workers = int(os.getenv("GUNICORN_WORKERS", "2"))

@@ -11,6 +11,8 @@ set -e
 APP_DIR="/opt/performance_assessment"
 SERVICE_NAME="perf-assessment"
 REPO_URL="https://github.com/ssunn82/performance-assessment.git"
+# 对外访问端口（nginx），健康检查必须打这个端口；应用内部 8000 不对外开放
+PUBLIC_PORT="${PUBLIC_PORT:-8851}"
 
 cd "$APP_DIR" || { echo "✗ 请先 cd 到 $APP_DIR 再执行"; exit 1; }
 
@@ -58,8 +60,8 @@ fi
 echo "==> [6/6] 重启服务（数据库自动迁移）"
 sudo systemctl restart "$SERVICE_NAME"
 sleep 2
-CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost || true)
-echo "   本地 HTTP 状态: ${CODE:-无响应}"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${PUBLIC_PORT}" || true)
+echo "   本地 HTTP 状态（:${PUBLIC_PORT}）: ${CODE:-无响应}"
 
 echo ""
 echo "✅ 转换完成！今后更新只需两行："

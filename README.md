@@ -36,7 +36,7 @@ python run.py
 # 2. 赋权并执行一键部署
 chmod +x deploy.sh
 sudo ./deploy.sh
-# 3. 在云控制台防火墙放行 TCP 80（及 443 若启用 HTTPS）
+# 3. 在云控制台防火墙放行 TCP 8851
 ```
 
 部署要点：
@@ -44,12 +44,16 @@ sudo ./deploy.sh
 | 项 | 说明 |
 |----|------|
 | 运行方式 | `gunicorn -c gunicorn.conf.py main:app`（多 Worker，替代开发服务器） |
+| 访问地址 | `http://<公网IP>:8851`（**仅需放行 8851 这一个端口**） |
+| 端口设计 | nginx 对外 `0.0.0.0:8851`；gunicorn 仅监听 `127.0.0.1:8000`，公网不可直连 |
 | 会话密钥 | 必须通过环境变量 `SESSION_SECRET_KEY` 设置强随机值（见 `.env.example`） |
 | 数据库 | SQLite 已开启 WAL 模式，支持多人并发读写 |
 | 反向代理 | nginx 反代 `127.0.0.1:8000`，静态资源直出 |
-| HTTPS | 强烈建议：HR 数据务必加密传输，用 certbot 免费证书 |
+| HTTPS | 可选：默认 HTTP-01 需占用 80，推荐用 certbot **DNS-01** 校验（不占 80/443） |
 | 进程管理 | systemd 服务，开机自启 + 崩溃自动重启 |
 | 备份 | 定期备份 `data_v2.db`（及 `*-wal`/`*-shm` 文件），或利用服务器快照 |
+
+> 换端口：改 `nginx.conf` 的 `listen` 或部署时 `sudo PUBLIC_PORT=9000 ./deploy.sh`，并同步修改控制台防火墙端口。
 
 ## 生命周期与打分重置
 
