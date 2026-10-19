@@ -171,7 +171,57 @@ class Database:
             )
         """)
 
+        # ========== 按 session 隔离的人员属性表 ==========
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS session_assessors (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                assessor_id INTEGER NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES assessment_sessions(id),
+                FOREIGN KEY (assessor_id) REFERENCES assessors(id),
+                UNIQUE(session_id, assessor_id)
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_session_assessors_session
+            ON session_assessors(session_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_session_assessors_assessor
+            ON session_assessors(assessor_id)
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS session_evaluatees (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                evaluatee_id INTEGER NOT NULL,
+                position TEXT,
+                department TEXT,
+                group_type TEXT,
+                department_ref_score TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES assessment_sessions(id),
+                FOREIGN KEY (evaluatee_id) REFERENCES evaluatees(id),
+                UNIQUE(session_id, evaluatee_id)
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_session_evaluatees_session
+            ON session_evaluatees(session_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_session_evaluatees_evaluatee
+            ON session_evaluatees(evaluatee_id)
+        """)
+
         self.conn.commit()
+
+        # 存量迁移：把全局 evaluatees 的属性按 session 复制到 session_evaluatees
+        self._migrate_session_evaluatees()
+        self._migrate_session_assessors()
 
     def _seed_default_data(self):
         cursor = self.conn.cursor()
@@ -203,6 +253,70 @@ class Database:
                 ("admin", pw_hash, salt)
             )
 
+        self.conn.commit()
+
+    def _migrate_session_evaluatees(self):
+        """
+        将全局 evaluatees 的季度属性，按每个 session 复制到 session_evaluatees。
+        改造前所有 session 共享全局表，改造后冻结为各自 session 的数据。
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) as cnt FROM session_evaluatees")
+        if cursor.fetchone()['cnt'] > 0:
+            return
+        cursor.execute("""
+            SELECT DISTINCT session_id, evaluatee_id
+            FROM (
+                SELECT session_id, evaluatee_id FROM assessment_relations
+                UNION
+                SELECT session_id, evaluatee_id FROM scores
+            )
+            ORDER BY session_id, evaluatee_id
+        """)
+        pairs = cursor.fetchall()
+        for row in pairs:
+            sid, eid = row['session_id'], row['evaluatee_id']
+            cursor.execute(
+                "SELECT position, department, group_type, department_ref_score FROM evaluatees WHERE id = ?",
+                (eid,)
+            )
+            ev = cursor.fetchone()
+            if not ev:
+                continue
+            cursor.execute("""
+                INSERT OR IGNORE INTO session_evaluatees
+                (session_id, evaluatee_id, position, department, group_type, department_ref_score)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (sid, eid, ev['position'], ev['department'], ev['group_type'], ev['department_ref_score']))
+        self.conn.commit()
+
+    def _migrate_session_assessors(self):
+        """
+        将全局 assessors 按每个 session 复制到 session_assessors，保持季度维度一致。
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) as cnt FROM session_assessors")
+        if cursor.fetchone()['cnt'] > 0:
+            return
+        cursor.execute("""
+            SELECT DISTINCT session_id, assessor_id
+            FROM (
+                SELECT session_id, assessor_id FROM assessment_relations
+                UNION
+                SELECT session_id, assessor_id FROM scores
+            )
+            ORDER BY session_id, assessor_id
+        """)
+        pairs = cursor.fetchall()
+        for row in pairs:
+            sid, aid = row['session_id'], row['assessor_id']
+            cursor.execute("SELECT id FROM assessors WHERE id = ?", (aid,))
+            if not cursor.fetchone():
+                continue
+            cursor.execute("""
+                INSERT OR IGNORE INTO session_assessors (session_id, assessor_id)
+                VALUES (?, ?)
+            """, (sid, aid))
         self.conn.commit()
 
     # ========== 考核链接令牌（防止枚举他人打分链接）============
@@ -309,6 +423,8 @@ class Database:
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM scores WHERE session_id = ?", (session_id,))
         cursor.execute("DELETE FROM assessment_relations WHERE session_id = ?", (session_id,))
+        cursor.execute("DELETE FROM session_evaluatees WHERE session_id = ?", (session_id,))
+        cursor.execute("DELETE FROM session_assessors WHERE session_id = ?", (session_id,))
         cursor.execute("DELETE FROM assessment_sessions WHERE id = ?", (session_id,))
         self.conn.commit()
 
@@ -422,9 +538,15 @@ class Database:
         cursor.execute("""
             SELECT sh.archived_at, sh.score, sh.evaluatee_id,
                    e.name as evaluatee_name, e.employee_id as evaluatee_employee_id,
+                   COALESCE(se.position, e.position) as position,
+                   COALESCE(se.department, e.department) as department,
+                   COALESCE(se.group_type, e.group_type) as group_type,
+                   COALESCE(se.department_ref_score, e.department_ref_score) as department_ref_score,
                    i.name as indicator_name, i.weight as indicator_weight, i.max_score
             FROM score_history sh
             JOIN evaluatees e ON sh.evaluatee_id = e.id
+            LEFT JOIN session_evaluatees se
+                ON se.session_id = sh.session_id AND se.evaluatee_id = e.id
             JOIN indicators i ON sh.indicator_id = i.id
             WHERE sh.session_id=? AND sh.assessor_id=?
             ORDER BY sh.archived_at DESC, sh.evaluatee_id, sh.indicator_id
@@ -482,33 +604,71 @@ class Database:
         self.conn.commit()
 
     # ========== 考核人 ==========
-    def add_assessor(self, name: str, employee_id: str = None) -> int:
+    def add_assessor(self, name: str, employee_id: str = None, session_id: int = None) -> int:
+        if session_id is None:
+            session_id = self.get_current_session_id()
         cursor = self.conn.cursor()
         if employee_id:
             cursor.execute("SELECT id FROM assessors WHERE employee_id = ?", (employee_id,))
             existing = cursor.fetchone()
             if existing:
+                assessor_id = existing['id']
                 cursor.execute(
                     "UPDATE assessors SET name=? WHERE id=?",
-                    (name, existing['id'])
+                    (name, assessor_id)
                 )
-                self.conn.commit()
-                return existing['id']
-        cursor.execute(
-            "INSERT INTO assessors (name, employee_id, access_token) VALUES (?, ?, ?)",
-            (name, employee_id, secrets.token_hex(16))
-        )
-        self.conn.commit()
-        return cursor.lastrowid
+            else:
+                cursor.execute(
+                    "INSERT INTO assessors (name, employee_id, access_token) VALUES (?, ?, ?)",
+                    (name, employee_id, secrets.token_hex(16))
+                )
+                assessor_id = cursor.lastrowid
+        else:
+            cursor.execute(
+                "INSERT INTO assessors (name, employee_id, access_token) VALUES (?, ?, ?)",
+                (name, employee_id, secrets.token_hex(16))
+            )
+            assessor_id = cursor.lastrowid
 
-    def get_all_assessors(self) -> List[Dict]:
+        cursor.execute(
+            "SELECT id FROM session_assessors WHERE session_id=? AND assessor_id=?",
+            (session_id, assessor_id)
+        )
+        if not cursor.fetchone():
+            cursor.execute(
+                "INSERT OR IGNORE INTO session_assessors (session_id, assessor_id) VALUES (?, ?)",
+                (session_id, assessor_id)
+            )
+        self.conn.commit()
+        return assessor_id
+
+    def get_all_assessors(self, session_id: int = None) -> List[Dict]:
+        if session_id is None:
+            session_id = self.get_current_session_id()
         cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM assessors ORDER BY id")
+        cursor.execute("""
+            SELECT a.* FROM assessors a
+            JOIN session_assessors sa ON sa.assessor_id = a.id
+            WHERE sa.session_id = ?
+            ORDER BY a.id
+        """, (session_id,))
         return [dict(row) for row in cursor.fetchall()]
 
-    def get_assessor_by_employee_id(self, employee_id: str) -> Optional[Dict]:
+    def get_assessor(self, assessor_id: int) -> Optional[Dict]:
         cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM assessors WHERE employee_id = ?", (employee_id,))
+        cursor.execute("SELECT * FROM assessors WHERE id = ?", (assessor_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def get_assessor_by_employee_id(self, employee_id: str, session_id: int = None) -> Optional[Dict]:
+        if session_id is None:
+            session_id = self.get_current_session_id()
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT a.* FROM assessors a
+            JOIN session_assessors sa ON sa.assessor_id = a.id
+            WHERE a.employee_id = ? AND sa.session_id = ?
+        """, (employee_id, session_id))
         row = cursor.fetchone()
         return dict(row) if row else None
 
@@ -516,10 +676,13 @@ class Database:
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM scores WHERE assessor_id = ?", (assessor_id,))
         cursor.execute("DELETE FROM assessment_relations WHERE assessor_id = ?", (assessor_id,))
+        cursor.execute("DELETE FROM session_assessors WHERE assessor_id = ?", (assessor_id,))
         cursor.execute("DELETE FROM assessors WHERE id = ?", (assessor_id,))
         self.conn.commit()
 
-    def import_assessors(self, data: List[Dict]) -> Dict:
+    def import_assessors(self, data: List[Dict], session_id: int = None) -> Dict:
+        if session_id is None:
+            session_id = self.get_current_session_id()
         created, updated = 0, 0
         for item in data:
             emp_id = item.get('employee_id')
@@ -530,9 +693,11 @@ class Database:
             cursor.execute("SELECT id FROM assessors WHERE employee_id = ?", (str(emp_id),))
             existing = cursor.fetchone()
             if existing:
+                assessor_id = existing['id']
+                # 仅更新全局姓名
                 cursor.execute(
                     "UPDATE assessors SET name=? WHERE id=?",
-                    (str(name), existing['id'])
+                    (str(name), assessor_id)
                 )
                 updated += 1
             else:
@@ -540,41 +705,92 @@ class Database:
                     "INSERT INTO assessors (name, employee_id, access_token) VALUES (?,?,?)",
                     (str(name), str(emp_id), secrets.token_hex(16))
                 )
+                assessor_id = cursor.lastrowid
                 created += 1
+
+            cursor.execute(
+                "SELECT id FROM session_assessors WHERE session_id=? AND assessor_id=?",
+                (session_id, assessor_id)
+            )
+            if not cursor.fetchone():
+                cursor.execute(
+                    "INSERT OR IGNORE INTO session_assessors (session_id, assessor_id) VALUES (?, ?)",
+                    (session_id, assessor_id)
+                )
         self.conn.commit()
         return {"created": created, "updated": updated, "total": len(data)}
 
     # ========== 被考核人 ==========
     def add_evaluatee(self, name: str, employee_id: str = None, position: str = None,
                       department: str = None, group_type: str = None,
-                      department_ref_score: str = None) -> int:
+                      department_ref_score: str = None, session_id: int = None) -> int:
+        if session_id is None:
+            session_id = self.get_current_session_id()
         cursor = self.conn.cursor()
         if employee_id:
             cursor.execute("SELECT id FROM evaluatees WHERE employee_id = ?", (employee_id,))
             existing = cursor.fetchone()
             if existing:
+                evaluatee_id = existing['id']
+            else:
                 cursor.execute(
-                    "UPDATE evaluatees SET name=?, position=?, department=?, group_type=?, department_ref_score=? WHERE id=?",
-                    (name, position, department, group_type, department_ref_score, existing['id'])
+                    "INSERT INTO evaluatees (name, employee_id) VALUES (?, ?)",
+                    (name, employee_id)
                 )
-                self.conn.commit()
-                return existing['id']
-        cursor.execute(
-            "INSERT INTO evaluatees (name, employee_id, position, department, group_type, department_ref_score) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (name, employee_id, position, department, group_type, department_ref_score)
-        )
-        self.conn.commit()
-        return cursor.lastrowid
+                evaluatee_id = cursor.lastrowid
+        else:
+            cursor.execute(
+                "INSERT INTO evaluatees (name, employee_id) VALUES (?, ?)",
+                (name, employee_id)
+            )
+            evaluatee_id = cursor.lastrowid
 
-    def get_all_evaluatees(self) -> List[Dict]:
+        cursor.execute("""
+            INSERT OR REPLACE INTO session_evaluatees
+            (session_id, evaluatee_id, position, department, group_type, department_ref_score)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (session_id, evaluatee_id, position, department, group_type, department_ref_score))
+        self.conn.commit()
+        return evaluatee_id
+
+    def get_all_evaluatees(self, session_id: int = None) -> List[Dict]:
+        if session_id is None:
+            session_id = self.get_current_session_id()
         cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM evaluatees ORDER BY id")
+        cursor.execute("""
+            SELECT e.id, e.employee_id, e.name,
+                   COALESCE(se.position, '') as position,
+                   COALESCE(se.department, '') as department,
+                   COALESCE(se.group_type, '') as group_type,
+                   COALESCE(se.department_ref_score, '') as department_ref_score,
+                   e.created_at
+            FROM evaluatees e
+            LEFT JOIN session_evaluatees se
+                ON se.session_id = ? AND se.evaluatee_id = e.id
+            WHERE EXISTS (
+                SELECT 1 FROM session_evaluatees se2
+                WHERE se2.session_id = ? AND se2.evaluatee_id = e.id
+            )
+            ORDER BY e.id
+        """, (session_id, session_id))
         return [dict(row) for row in cursor.fetchall()]
 
-    def get_evaluatee_by_employee_id(self, employee_id: str) -> Optional[Dict]:
+    def get_evaluatee_by_employee_id(self, employee_id: str, session_id: int = None) -> Optional[Dict]:
+        if session_id is None:
+            session_id = self.get_current_session_id()
         cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM evaluatees WHERE employee_id = ?", (employee_id,))
+        cursor.execute("""
+            SELECT e.id, e.employee_id, e.name,
+                   COALESCE(se.position, '') as position,
+                   COALESCE(se.department, '') as department,
+                   COALESCE(se.group_type, '') as group_type,
+                   COALESCE(se.department_ref_score, '') as department_ref_score,
+                   e.created_at
+            FROM evaluatees e
+            LEFT JOIN session_evaluatees se
+                ON se.session_id = ? AND se.evaluatee_id = e.id
+            WHERE e.employee_id = ?
+        """, (session_id, employee_id))
         row = cursor.fetchone()
         return dict(row) if row else None
 
@@ -582,10 +798,13 @@ class Database:
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM scores WHERE evaluatee_id = ?", (evaluatee_id,))
         cursor.execute("DELETE FROM assessment_relations WHERE evaluatee_id = ?", (evaluatee_id,))
+        cursor.execute("DELETE FROM session_evaluatees WHERE evaluatee_id = ?", (evaluatee_id,))
         cursor.execute("DELETE FROM evaluatees WHERE id = ?", (evaluatee_id,))
         self.conn.commit()
 
-    def import_evaluatees(self, data: List[Dict]) -> Dict:
+    def import_evaluatees(self, data: List[Dict], session_id: int = None) -> Dict:
+        if session_id is None:
+            session_id = self.get_current_session_id()
         created, updated = 0, 0
         for item in data:
             emp_id = item.get('employee_id')
@@ -596,20 +815,31 @@ class Database:
             cursor.execute("SELECT id FROM evaluatees WHERE employee_id = ?", (str(emp_id),))
             existing = cursor.fetchone()
             if existing:
-                cursor.execute(
-                    "UPDATE evaluatees SET name=?, position=?, department=?, group_type=?, department_ref_score=? WHERE id=?",
-                    (str(name), item.get('position'), item.get('department'),
-                     item.get('group_type'), item.get('department_ref_score'), existing['id'])
-                )
-                updated += 1
+                evaluatee_id = existing['id']
             else:
                 cursor.execute(
-                    "INSERT INTO evaluatees (name, employee_id, position, department, group_type, department_ref_score) "
-                    "VALUES (?,?,?,?,?,?)",
-                    (str(name), str(emp_id), item.get('position'), item.get('department'),
-                     item.get('group_type'), item.get('department_ref_score'))
+                    "INSERT INTO evaluatees (name, employee_id) VALUES (?, ?)",
+                    (str(name), str(emp_id))
                 )
+                evaluatee_id = cursor.lastrowid
                 created += 1
+
+            cursor.execute(
+                "SELECT id FROM session_evaluatees WHERE session_id=? AND evaluatee_id=?",
+                (session_id, evaluatee_id)
+            )
+            se_existing = cursor.fetchone()
+            if se_existing:
+                updated += 1
+            cursor.execute("""
+                INSERT OR REPLACE INTO session_evaluatees
+                (session_id, evaluatee_id, position, department, group_type, department_ref_score)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                session_id, evaluatee_id,
+                item.get('position'), item.get('department'),
+                item.get('group_type'), item.get('department_ref_score')
+            ))
         self.conn.commit()
         return {"created": created, "updated": updated, "total": len(data)}
 
@@ -619,6 +849,14 @@ class Database:
         if session_id is None:
             session_id = self.get_current_session_id()
         cursor = self.conn.cursor()
+        cursor.execute(
+            "INSERT OR IGNORE INTO session_assessors (session_id, assessor_id) VALUES (?, ?)",
+            (session_id, assessor_id)
+        )
+        cursor.execute(
+            "INSERT OR IGNORE INTO session_evaluatees (session_id, evaluatee_id) VALUES (?, ?)",
+            (session_id, evaluatee_id)
+        )
         cursor.execute(
             "INSERT INTO assessment_relations (session_id, assessor_id, evaluatee_id, weight) VALUES (?, ?, ?, ?)",
             (session_id, assessor_id, evaluatee_id, weight)
@@ -631,10 +869,15 @@ class Database:
             session_id = self.get_current_session_id()
         cursor = self.conn.cursor()
         cursor.execute("""
-            SELECT ar.*, e.name as evaluatee_name, e.position, e.department,
-                   e.group_type, e.department_ref_score, e.employee_id as evaluatee_employee_id
+            SELECT ar.*, e.name as evaluatee_name, e.employee_id as evaluatee_employee_id,
+                   COALESCE(se.position, e.position) as position,
+                   COALESCE(se.department, e.department) as department,
+                   COALESCE(se.group_type, e.group_type) as group_type,
+                   COALESCE(se.department_ref_score, e.department_ref_score) as department_ref_score
             FROM assessment_relations ar
             JOIN evaluatees e ON ar.evaluatee_id = e.id
+            LEFT JOIN session_evaluatees se
+                ON se.session_id = ar.session_id AND se.evaluatee_id = e.id
             WHERE ar.session_id = ? AND ar.assessor_id = ?
             ORDER BY ar.id
         """, (session_id, assessor_id))
@@ -647,10 +890,15 @@ class Database:
         cursor.execute("""
             SELECT ar.*, a.name as assessor_name, a.employee_id as assessor_employee_id,
                    e.name as evaluatee_name, e.employee_id as evaluatee_employee_id,
-                   e.position, e.department, e.group_type, e.department_ref_score
+                   COALESCE(se.position, e.position) as position,
+                   COALESCE(se.department, e.department) as department,
+                   COALESCE(se.group_type, e.group_type) as group_type,
+                   COALESCE(se.department_ref_score, e.department_ref_score) as department_ref_score
             FROM assessment_relations ar
             JOIN assessors a ON ar.assessor_id = a.id
             JOIN evaluatees e ON ar.evaluatee_id = e.id
+            LEFT JOIN session_evaluatees se
+                ON se.session_id = ar.session_id AND se.evaluatee_id = e.id
             WHERE ar.session_id = ?
             ORDER BY ar.id
         """, (session_id,))
@@ -694,6 +942,26 @@ class Database:
             if not evaluatee:
                 errors.append(f"被考核人工号 {evaluatee_emp} 不存在")
                 continue
+
+            # 确保考核人和被考核人在当前 session 的属性表中存在
+            cursor.execute(
+                "SELECT id FROM session_assessors WHERE session_id=? AND assessor_id=?",
+                (session_id, assessor['id'])
+            )
+            if not cursor.fetchone():
+                cursor.execute(
+                    "INSERT OR IGNORE INTO session_assessors (session_id, assessor_id) VALUES (?, ?)",
+                    (session_id, assessor['id'])
+                )
+            cursor.execute(
+                "SELECT id FROM session_evaluatees WHERE session_id=? AND evaluatee_id=?",
+                (session_id, evaluatee['id'])
+            )
+            if not cursor.fetchone():
+                cursor.execute(
+                    "INSERT OR IGNORE INTO session_evaluatees (session_id, evaluatee_id) VALUES (?, ?)",
+                    (session_id, evaluatee['id'])
+                )
 
             cursor.execute(
                 "SELECT id FROM assessment_relations WHERE session_id=? AND assessor_id=? AND evaluatee_id=?",
@@ -768,10 +1036,16 @@ class Database:
             session_id = self.get_current_session_id()
         cursor = self.conn.cursor()
         cursor.execute("""
-            SELECT s.*, e.name as evaluatee_name, e.position, e.department,
+            SELECT s.*, e.name as evaluatee_name, e.employee_id as evaluatee_employee_id,
+                   COALESCE(se.position, e.position) as position,
+                   COALESCE(se.department, e.department) as department,
+                   COALESCE(se.group_type, e.group_type) as group_type,
+                   COALESCE(se.department_ref_score, e.department_ref_score) as department_ref_score,
                    i.name as indicator_name, i.weight as indicator_weight, i.max_score
             FROM scores s
             JOIN evaluatees e ON s.evaluatee_id = e.id
+            LEFT JOIN session_evaluatees se
+                ON se.session_id = s.session_id AND se.evaluatee_id = e.id
             JOIN indicators i ON s.indicator_id = i.id
             WHERE s.session_id=? AND s.assessor_id=?
             ORDER BY s.evaluatee_id, s.indicator_id
@@ -864,8 +1138,11 @@ class Database:
         cursor = self.conn.cursor()
         cursor.execute("""
             SELECT
-                e.id as evaluatee_id, e.name as evaluatee_name, e.position,
-                e.department, e.group_type, e.employee_id as evaluatee_employee_id,
+                e.id as evaluatee_id, e.name as evaluatee_name,
+                COALESCE(se.position, e.position) as position,
+                COALESCE(se.department, e.department) as department,
+                COALESCE(se.group_type, e.group_type) as group_type,
+                e.employee_id as evaluatee_employee_id,
                 a.name as assessor_name, a.id as assessor_id,
                 a.employee_id as assessor_employee_id,
                 ar.weight as assessor_weight,
@@ -877,6 +1154,8 @@ class Database:
             JOIN assessors a ON s.assessor_id = a.id
             JOIN assessment_relations ar ON ar.assessor_id = a.id
                 AND ar.evaluatee_id = e.id AND ar.session_id = s.session_id
+            LEFT JOIN session_evaluatees se
+                ON se.session_id = s.session_id AND se.evaluatee_id = e.id
             JOIN indicators i ON s.indicator_id = i.id
             WHERE s.score IS NOT NULL AND s.session_id = ?
             ORDER BY e.id, a.id, i.id

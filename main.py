@@ -230,8 +230,7 @@ async def assess_by_token(request: Request, token: str):
 async def _render_assess_page(request: Request, assessor_id: int, token: str):
     db = get_db()
     session_id = db.get_current_session_id()
-    assessors = db.get_all_assessors()
-    assessor = next((a for a in assessors if a['id'] == assessor_id), None)
+    assessor = db.get_assessor(assessor_id)
 
     if not assessor:
         return templates.TemplateResponse(request, "error.html", {
@@ -413,7 +412,8 @@ async def create_assessor(request: Request, req: AssessorCreate):
     if not is_logged_in(request):
         return JSONResponse({"error": "未登录"}, status_code=401)
     db = get_db()
-    aid = db.add_assessor(req.name, req.employee_id)
+    session_id = db.get_current_session_id()
+    aid = db.add_assessor(req.name, req.employee_id, session_id)
     return {"id": aid, "name": req.name, "employee_id": req.employee_id}
 
 
@@ -432,9 +432,11 @@ async def create_evaluatee(request: Request, req: EvaluateeCreate):
     if not is_logged_in(request):
         return JSONResponse({"error": "未登录"}, status_code=401)
     db = get_db()
+    session_id = db.get_current_session_id()
     eid = db.add_evaluatee(
         req.name, req.employee_id, req.position,
-        req.department, req.group_type, req.department_ref_score
+        req.department, req.group_type, req.department_ref_score,
+        session_id
     )
     return {"id": eid, "name": req.name}
 
@@ -676,7 +678,8 @@ async def import_assessors(request: Request, file: UploadFile = File(...)):
         })
 
     db = get_db()
-    result = db.import_assessors(data)
+    session_id = db.get_current_session_id()
+    result = db.import_assessors(data, session_id)
     return {"success": True, "result": result}
 
 
@@ -706,7 +709,8 @@ async def import_evaluatees(request: Request, file: UploadFile = File(...)):
         })
 
     db = get_db()
-    result = db.import_evaluatees(data)
+    session_id = db.get_current_session_id()
+    result = db.import_evaluatees(data, session_id)
     return {"success": True, "result": result}
 
 

@@ -499,6 +499,66 @@ r = session.get(f'{BASE}/assess/1')
 test('Scores retained', '已评分' in r.text)
 session.post(f'{BASE}/api/sessions/{kp_sid}/lifecycle', json={'action': 'end'})
 
+# ============================================================
+# 跨季度数据隔离测试：同一被考核人在不同季度的部门参考分相互独立
+# ============================================================
+
+def _create_isolation_session(name_suffix, quarter):
+    r = session.post(f'{BASE}/api/sessions', json={
+        'name': f'隔离测试-{name_suffix}-{RUN_TAG}',
+        'quarter': quarter
+    })
+    r = session.get(f'{BASE}/api/sessions')
+    return next(s['id'] for s in r.json()['sessions'] if s['status'] == 'active')
+
+
+def _import_evaluatee_with_ref(sid, emp_id, name, ref_score):
+    # 先激活目标会话
+    session.post(f'{BASE}/api/sessions/{sid}/activate')
+    buf = io.BytesIO()
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(['工号', '姓名', '部门', '职务', '组别', '部门考核得分(参考值)'])
+    ws.append([emp_id, name, '测试部', '经理', 'A组', str(ref_score)])
+    wb.save(buf); buf.seek(0)
+    r = session.post(f'{BASE}/api/import/evaluatees', files={'file': ('t.xlsx', buf)})
+    return r.json()
+
+
+iso_emp_id = f'ISO{RUN_TAG[-6:]}'
+iso_name = f'隔离员工{RUN_TAG[-6:]}'
+
+# 创建 Q1 并写入 ref=80
+sid_q1 = _create_isolation_session('Q1', f'{TEST_QUARTER_PREFIX}-ISO-Q1-{RUN_TAG}')
+_import_evaluatee_with_ref(sid_q1, iso_emp_id, iso_name, 80)
+# 结果页应展示 Q1 ref score
+r = session.get(f'{BASE}/api/results')
+iso_eval_q1 = next((e for e in r.json()['evaluatees'] if e.get('employee_id') == iso_emp_id), None)
+test('Session isolation: Q1 ref score captured',
+     iso_eval_q1 is not None and iso_eval_q1.get('department_ref_score') == '80',
+     f"found={iso_eval_q1 is not None}, score={iso_eval_q1.get('department_ref_score') if iso_eval_q1 else None}")
+
+# 创建 Q2 并写入 ref=90
+sid_q2 = _create_isolation_session('Q2', f'{TEST_QUARTER_PREFIX}-ISO-Q2-{RUN_TAG}')
+_import_evaluatee_with_ref(sid_q2, iso_emp_id, iso_name, 90)
+# 在 Q2 验证 ref=90
+r = session.get(f'{BASE}/api/results')
+iso_eval_q2 = next((e for e in r.json()['evaluatees'] if e.get('employee_id') == iso_emp_id), None)
+test('Session isolation: Q2 ref score captured',
+     iso_eval_q2 is not None and iso_eval_q2.get('department_ref_score') == '90',
+     f"score={iso_eval_q2.get('department_ref_score') if iso_eval_q2 else None}")
+
+# 切换回 Q1，验证仍为 80
+session.post(f'{BASE}/api/sessions/{sid_q1}/activate')
+r = session.get(f'{BASE}/api/results')
+iso_eval_q1_again = next((e for e in r.json()['evaluatees'] if e.get('employee_id') == iso_emp_id), None)
+test('Session isolation: Q1 unchanged after Q2 update',
+     iso_eval_q1_again is not None and iso_eval_q1_again.get('department_ref_score') == '80',
+     f"score={iso_eval_q1_again.get('department_ref_score') if iso_eval_q1_again else None}")
+
+# 结束隔离测试会话
+session.post(f'{BASE}/api/sessions/{sid_q1}/lifecycle', json={'action': 'end'})
+session.post(f'{BASE}/api/sessions/{sid_q2}/lifecycle', json={'action': 'end'})
+
 # 收尾：切回基准会话，并保证其处于可打分状态（running），
 # 否则下次运行第 1 段打分测试会因会话锁定而全部失败。
 session.post(f'{BASE}/api/sessions/{orig_sid}/activate')
