@@ -357,8 +357,27 @@ async def delete_session(request: Request, session_id: int):
     if not is_logged_in(request):
         return JSONResponse({"error": "未登录"}, status_code=401)
     db = get_db()
+    current = db.get_current_session()
+    if current and current['id'] == session_id:
+        return JSONResponse({"error": "当前活跃任务不能删除，请先切换到其他任务"}, status_code=400)
     db.delete_session(session_id)
     return {"message": "已删除考核任务"}
+
+
+@app.get("/tasks", response_class=HTMLResponse)
+async def tasks_page(request: Request):
+    if not is_logged_in(request):
+        return RedirectResponse("/login", status_code=303)
+    db = get_db()
+    sessions = db.get_all_sessions()
+    current = db.get_current_session()
+    current_id = current['id'] if current else None
+    return templates.TemplateResponse(request, "tasks.html", {
+        "sessions": sessions,
+        "current_id": current_id,
+        "labels": LIFECYCLE_LABELS,
+        "username": request.session.get("username", "admin"),
+    })
 
 
 @app.post("/api/sessions/{session_id}/clear")
@@ -455,9 +474,20 @@ async def delete_evaluatee(request: Request, evaluatee_id: int):
 async def create_relation(request: Request, req: RelationCreate):
     if not is_logged_in(request):
         return JSONResponse({"error": "未登录"}, status_code=401)
+    if req.weight <= 0 or req.weight > 1:
+        return JSONResponse({"error": "权重必须在 (0, 1] 之间"}, status_code=400)
     db = get_db()
     rid = db.add_relation(req.assessor_id, req.evaluatee_id, req.weight)
-    return {"id": rid}
+    # 添加后校验该被考核人的权重合计，异常返回警告（不阻塞添加，允许逐步配置）
+    session_id = db.get_current_session_id()
+    check = db.check_session_weights(session_id)
+    warning = None
+    for issue in check["relation_issues"]:
+        if issue["evaluatee_id"] == req.evaluatee_id:
+            warning = (f"当前该被考核人的考核人权重合计为 {issue['sum']}（应为1），"
+                       f"各权重: {issue['detail']}")
+            break
+    return {"id": rid, "warning": warning}
 
 
 @app.delete("/api/relations/{relation_id}", response_class=JSONResponse)
@@ -476,7 +506,13 @@ async def create_indicator(request: Request, req: IndicatorCreate):
         return JSONResponse({"error": "未登录"}, status_code=401)
     db = get_db()
     iid = db.add_indicator(req.name, req.weight, req.max_score)
-    return {"id": iid, "name": req.name}
+    # 添加后校验全部指标权重合计，异常返回警告（不阻塞，允许逐步配置）
+    cursor_indicators = db.get_all_indicators()
+    total_weight = round(sum(i['weight'] for i in cursor_indicators), 4)
+    warning = None
+    if abs(total_weight - 1.0) > 0.001:
+        warning = f"当前全部指标权重合计为 {total_weight}（应为1），启动考核前请调整"
+    return {"id": iid, "name": req.name, "warning": warning}
 
 
 @app.delete("/api/indicators/{indicator_id}", response_class=JSONResponse)
@@ -515,9 +551,9 @@ async def batch_save_scores(request: Request, assessor_id: int, req: ScoreBatchS
         ind = ind_map.get(ind_id)
         if not ind:
             raise HTTPException(status_code=404, detail=f"指标不存在: {ind_id}")
-        if score < 0 or score > ind['max_score']:
+        if score < 0 or score > 100:
             raise HTTPException(status_code=400,
-                                detail=f"分数应在 0-{ind['max_score']} 之间")
+                                detail=f"分数应在 0-100 之间（指标「{ind['name']}」收到 {score}）")
         db.save_score(assessor_id, req.evaluatee_id, ind_id, score, session_id)
         saved += 1
 
@@ -567,8 +603,7 @@ async def reset_assessor_scores(request: Request, assessor_id: int):
     if not is_logged_in(request):
         return JSONResponse({"error": "未登录"}, status_code=401)
     db = get_db()
-    assessors = db.get_all_assessors()
-    assessor = next((a for a in assessors if a['id'] == assessor_id), None)
+    assessor = db.get_assessor(assessor_id)
     if not assessor:
         return JSONResponse({"success": False, "message": "考核人不存在"}, status_code=404)
 
@@ -586,8 +621,7 @@ async def get_score_history(request: Request, assessor_id: int):
     if not is_logged_in(request):
         return JSONResponse({"error": "未登录"}, status_code=401)
     db = get_db()
-    assessors = db.get_all_assessors()
-    assessor = next((a for a in assessors if a['id'] == assessor_id), None)
+    assessor = db.get_assessor(assessor_id)
     if not assessor:
         return JSONResponse({"success": False, "message": "考核人不存在"}, status_code=404)
 

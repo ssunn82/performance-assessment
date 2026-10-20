@@ -1244,6 +1244,14 @@ header {
 .btn-danger { background: var(--danger-color); }
 .btn-danger:hover { background: #b91c1c; }
 
+/* ========== 任务列表小按钮 ========== */
+.btn-sm {
+    padding: 4px 10px;
+    font-size: 0.85rem;
+    min-height: 28px;
+    margin-right: 6px;
+}
+
 /* ========== 打分页状态提示 ========== */
 .status-locked { background: #64748b; }
 

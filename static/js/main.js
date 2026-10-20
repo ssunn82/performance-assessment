@@ -292,6 +292,9 @@ async function importRelations(input) {
         if (r.errors && r.errors.length > 0) {
             msg += `\n\n以下记录导入失败：\n${r.errors.join('\n')}`;
         }
+        if (r.warnings && r.warnings.length > 0) {
+            msg += `\n\n⚠️ 权重警告：\n${r.warnings.join('\n')}`;
+        }
         alert(msg);
         location.reload();
     } else {

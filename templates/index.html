@@ -85,6 +85,10 @@
                 {% elif lc == 'paused' %}
                 <button class="btn-primary" onclick="confirmResume()">恢复考核</button>
                 <button class="btn-danger" onclick="confirmEnd()">结束</button>
+                {% elif lc == 'ended' %}
+                <p class="hint" style="margin:0;">当前任务已结束并锁定。可新建考核任务继续考核，或到任务列表管理历史任务。</p>
+                <button class="btn-primary" onclick="showCreateSession()">新建考核任务</button>
+                <a href="/tasks" class="tab tab-link" style="margin-left:10px;">任务列表</a>
                 {% endif %}
             </div>
         </div>
@@ -110,6 +114,7 @@
             <button class="tab" data-tab="indicators">指标体系</button>
             <button class="tab" data-tab="qrcodes">二维码</button>
             <button class="tab" data-tab="settings">设置</button>
+            <a href="/tasks" class="tab tab-link">任务列表</a>
             <a href="/progress" class="tab tab-link">考核进度</a>
             <a href="/results" class="tab tab-link">查看结果</a>
         </nav>

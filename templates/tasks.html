@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>考核任务列表 - 中层绩效考核</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>考核任务列表</h1>
+            <p>管理所有考核任务及其状态</p>
+            <div class="header-right">
+                <span class="user-badge">{{ username }}</span>
+                <a href="/" class="btn-back">返回首页</a>
+                <a href="/logout" class="btn-logout">退出</a>
+            </div>
+        </header>
+
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+                <h2 style="margin:0;">所有考核任务</h2>
+                <button class="btn-primary" onclick="showCreateSession()">新建考核任务</button>
+            </div>
+
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>任务名称</th>
+                        <th>季度</th>
+                        <th>状态</th>
+                        <th>创建时间</th>
+                        <th>当前活跃</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for s in sessions %}
+                    {% set lc = (s.lifecycle if s.lifecycle else 'draft') %}
+                    <tr>
+                        <td>{{ s.id }}</td>
+                        <td>{{ s.name }}</td>
+                        <td>{{ s.quarter }}</td>
+                        <td>
+                            <span class="lifecycle-badge lc-{{ lc }}">
+                                {{ labels.get(lc, lc) }}
+                            </span>
+                        </td>
+                        <td>{{ s.created_at }}</td>
+                        <td>
+                            {% if s.id == current_id %}
+                            <span class="badge badge-success">当前</span>
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if s.id != current_id %}
+                            <button class="btn-save btn-sm" onclick="activateSession({{ s.id }})">切换为当前</button>
+                            <button class="btn-danger btn-sm" onclick="deleteSession({{ s.id }}, '{{ s.name | replace("'", "\\'") }}')">删除</button>
+                            {% else %}
+                            <span class="hint">当前活跃任务不可删除</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 新建考核任务对话框 -->
+        <div class="modal-overlay" id="session-modal" style="display:none;">
+            <div class="modal-content">
+                <h3>新建考核任务</h3>
+                <form id="create-session-form">
+                    <div class="form-row">
+                        <label>考核名称：</label>
+                        <input type="text" name="name" placeholder="如：2026年三季度中层考核" required>
+                    </div>
+                    <div class="form-row">
+                        <label>季度：</label>
+                        <input type="text" name="quarter" placeholder="如：2026-Q3" required>
+                    </div>
+                    <div class="modal-actions">
+                        <button type="submit" class="btn-primary">创建</button>
+                        <button type="button" class="btn-back" onclick="document.getElementById('session-modal').style.display='none'">取消</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function showCreateSession() {
+            document.getElementById('session-modal').style.display = 'flex';
+        }
+
+        document.getElementById('create-session-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const res = await fetch('/api/sessions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: form.name.value, quarter: form.quarter.value })
+            });
+            if (res.ok) {
+                location.reload();
+            } else {
+                alert('创建失败');
+            }
+        });
+
+        async function activateSession(sessionId) {
+            if (!confirm('确认切换为当前考核任务？')) return;
+            const res = await fetch(`/api/sessions/${sessionId}/activate`, { method: 'POST' });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok) {
+                location.reload();
+            } else {
+                alert('切换失败：' + (data.error || '未知错误'));
+            }
+        }
+
+        async function deleteSession(sessionId, sessionName) {
+            if (!confirm(`确认删除考核任务「${sessionName}」？\n\n该任务下的考核关系、打分数据将被一并删除，不可恢复。`)) return;
+            const res = await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok) {
+                location.reload();
+            } else {
+                alert('删除失败：' + (data.error || '未知错误'));
+            }
+        }
+    </script>
+</body>
+</html>

@@ -453,6 +453,68 @@ class Database:
         row = cursor.fetchone()
         return (row['lifecycle'] if row else None) or 'draft'
 
+    WEIGHT_TOLERANCE = 0.001  # 权重浮点容差
+
+    def check_session_weights(self, session_id: int) -> Dict:
+        """
+        校验当前 session 的权重规则：
+        1. 考核关系：每个被考核人的所有考核人权重合计应为 1
+        2. 指标：全部指标权重合计应为 1（指标为全局配置）
+        返回 {"relation_issues": [...], "indicator_sum": float, "ok": bool}
+        relation_issues 每项: {evaluatee_name, sum, relations: [{assessor_name, weight}]}
+        """
+        cursor = self.conn.cursor()
+        issues = []
+
+        # 关系权重：按被考核人分组求和
+        cursor.execute("""
+            SELECT e.id as evaluatee_id, e.name as evaluatee_name,
+                   SUM(ar.weight) as weight_sum,
+                   GROUP_CONCAT(a.name || ':' || ROUND(ar.weight, 4), ', ') as detail
+            FROM assessment_relations ar
+            JOIN evaluatees e ON ar.evaluatee_id = e.id
+            JOIN assessors a ON ar.assessor_id = a.id
+            WHERE ar.session_id = ?
+            GROUP BY ar.evaluatee_id
+            HAVING ABS(SUM(ar.weight) - 1.0) > ?
+        """, (session_id, self.WEIGHT_TOLERANCE))
+        for row in cursor.fetchall():
+            issues.append({
+                "evaluatee_id": row['evaluatee_id'],
+                "evaluatee_name": row['evaluatee_name'],
+                "sum": round(row['weight_sum'], 4),
+                "detail": row['detail']
+            })
+
+        # 指标权重：全局合计
+        cursor.execute("SELECT SUM(weight) as s FROM indicators")
+        row = cursor.fetchone()
+        indicator_sum = round(row['s'] if row['s'] is not None else 0, 4)
+        indicator_ok = abs(indicator_sum - 1.0) <= self.WEIGHT_TOLERANCE
+
+        return {
+            "relation_issues": issues,
+            "indicator_sum": indicator_sum,
+            "indicator_ok": indicator_ok,
+            "ok": len(issues) == 0 and indicator_ok
+        }
+
+    def _weight_block_reason(self, session_id: int) -> Optional[str]:
+        """启动考核前的权重硬校验，不通过时返回原因文本（用于拒绝启动）"""
+        check = self.check_session_weights(session_id)
+        if check["ok"]:
+            return None
+        parts = []
+        if check["relation_issues"]:
+            detail = "; ".join(
+                f"{i['evaluatee_name']}(合计{i['sum']}，各考核人权重: {i['detail']})"
+                for i in check["relation_issues"]
+            )
+            parts.append(f"考核关系权重异常（每个被考核人的考核人权重合计应为1）：{detail}")
+        if not check["indicator_ok"]:
+            parts.append(f"指标权重合计应为1，当前为 {check['indicator_sum']}")
+        return "；".join(parts)
+
     def set_lifecycle(self, session_id: int, action: str, clear_scores: bool = False) -> Dict:
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM assessment_sessions WHERE id = ?", (session_id,))
@@ -472,6 +534,12 @@ class Database:
             target = allowed.get(current)
             if not target:
                 return {"success": False, "message": "当前考核状态不允许该操作"}
+
+        # 启动（测试/正式）前硬校验权重规则：关系权重合计=1、指标权重合计=1
+        if action in ("start", "start_test"):
+            reason = self._weight_block_reason(session_id)
+            if reason:
+                return {"success": False, "message": f"无法启动：{reason}"}
 
         prev_value = current if action == 'pause' else row['lifecycle_prev']
         cursor.execute(
@@ -921,6 +989,7 @@ class Database:
 
     def import_relations(self, data: List[Dict], session_id: int) -> Dict:
         created, errors = 0, []
+        involved_evaluatee_ids = set()
         for item in data:
             assessor_emp = str(item.get('assessor_employee_id', '')).strip()
             evaluatee_emp = str(item.get('evaluatee_employee_id', '')).strip()
@@ -929,6 +998,9 @@ class Database:
                 weight = float(weight)
             except (ValueError, TypeError):
                 weight = 1.0
+            if weight <= 0 or weight > 1:
+                errors.append(f"权重必须在 (0, 1] 之间：{assessor_emp} → {evaluatee_emp} 权重 {weight}")
+                continue
 
             cursor = self.conn.cursor()
             cursor.execute("SELECT id FROM assessors WHERE employee_id = ?", (assessor_emp,))
@@ -979,8 +1051,30 @@ class Database:
                     (session_id, assessor['id'], evaluatee['id'], weight)
                 )
                 created += 1
+            involved_evaluatee_ids.add(evaluatee['id'])
         self.conn.commit()
-        return {"created": created, "errors": errors, "total": len(data)}
+
+        # 导入后校验涉及被考核人的权重合计（警告不阻塞，支持分批导入逐步补齐）
+        warnings = []
+        if involved_evaluatee_ids:
+            cursor = self.conn.cursor()
+            placeholders = ",".join("?" for _ in involved_evaluatee_ids)
+            cursor.execute(f"""
+                SELECT e.name as evaluatee_name, SUM(ar.weight) as weight_sum,
+                       GROUP_CONCAT(a.name || ':' || ROUND(ar.weight, 4), ', ') as detail
+                FROM assessment_relations ar
+                JOIN evaluatees e ON ar.evaluatee_id = e.id
+                JOIN assessors a ON ar.assessor_id = a.id
+                WHERE ar.session_id = ? AND ar.evaluatee_id IN ({placeholders})
+                GROUP BY ar.evaluatee_id
+                HAVING ABS(SUM(ar.weight) - 1.0) > ?
+            """, (session_id, *involved_evaluatee_ids, self.WEIGHT_TOLERANCE))
+            for row in cursor.fetchall():
+                warnings.append(
+                    f"被考核人「{row['evaluatee_name']}」的考核人权重合计为 {round(row['weight_sum'], 4)}（应为1），"
+                    f"当前各权重: {row['detail']}"
+                )
+        return {"created": created, "errors": errors, "warnings": warnings, "total": len(data)}
 
     # ========== 指标 ==========
     def add_indicator(self, name: str, weight: float = 1.0,

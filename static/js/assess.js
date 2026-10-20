@@ -93,8 +93,8 @@ async function saveCurrentScores(silent = false) {
                 if (!silent) alert('指标 "' + ind.name + '" 的分数格式不正确');
                 return false;
             }
-            if (val < 0 || val > ind.max_score) {
-                if (!silent) alert('指标 "' + ind.name + '" 的分数应在 0-' + ind.max_score + ' 之间');
+            if (val < 0 || val > 100) {
+                if (!silent) alert('指标 "' + ind.name + '" 的分数应在 0-100 之间');
                 return false;
             }
             scores.push({ indicator_id: ind.id, score: val });
@@ -183,15 +183,25 @@ async function submitAllScores() {
             for (const ind of INDICATORS) {
                 const input = document.getElementById('score-' + ind.id);
                 if (input && input.value !== '') {
-                    scores.push({ indicator_id: ind.id, score: parseFloat(input.value) });
+                    const val = parseFloat(input.value);
+                    if (isNaN(val) || val < 0 || val > 100) {
+                        alert('当前编辑中存在超出 0-100 范围的分数，请修正后再提交');
+                        return;
+                    }
+                    scores.push({ indicator_id: ind.id, score: val });
                 }
             }
             if (scores.length > 0) {
-                await fetch('/api/scores/' + ASSESSOR_ID + '/batch', {
+                const res = await fetch('/api/scores/' + ASSESSOR_ID + '/batch', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-Access-Token': ACCESS_TOKEN },
                     body: JSON.stringify({ evaluatee_id: parseInt(evalId), scores: scores })
                 });
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    alert('保存失败：' + (data.detail || data.message || '请重试'));
+                    return;
+                }
                 if (!SCORE_MAP[evalId]) SCORE_MAP[evalId] = {};
                 scores.forEach(s => { SCORE_MAP[evalId][s.indicator_id] = s.score; });
             }
