@@ -511,13 +511,14 @@ async def create_indicator(request: Request, req: IndicatorCreate):
     if not is_logged_in(request):
         return JSONResponse({"error": "未登录"}, status_code=401)
     db = get_db()
-    iid = db.add_indicator(req.name, req.weight, req.max_score)
-    # 添加后校验全部指标权重合计，异常返回警告（不阻塞，允许逐步配置）
-    cursor_indicators = db.get_all_indicators()
+    session_id = db.get_current_session_id()
+    iid = db.add_indicator(req.name, req.weight, req.max_score, session_id)
+    # 添加后校验当前任务指标权重合计，异常返回警告（不阻塞，允许逐步配置）
+    cursor_indicators = db.get_all_indicators(session_id)
     total_weight = round(sum(i['weight'] for i in cursor_indicators), 4)
     warning = None
     if abs(total_weight - 1.0) > 0.001:
-        warning = f"当前全部指标权重合计为 {total_weight}（应为1），启动考核前请调整"
+        warning = f"当前任务指标权重合计为 {total_weight}（应为1），启动考核前请调整"
     return {"id": iid, "name": req.name, "warning": warning}
 
 
@@ -536,12 +537,13 @@ async def update_indicator(request: Request, indicator_id: int, req: IndicatorUp
         return JSONResponse({"error": "未登录"}, status_code=401)
     db = get_db()
     db.update_indicator(indicator_id, name=req.name, weight=req.weight, max_score=req.max_score)
-    # 更新后校验全部指标权重合计
-    indicators = db.get_all_indicators()
+    # 更新后校验当前任务指标权重合计
+    session_id = db.get_current_session_id()
+    indicators = db.get_all_indicators(session_id)
     total_weight = round(sum(i['weight'] for i in indicators), 4)
     warning = None
     if abs(total_weight - 1.0) > 0.001:
-        warning = f"当前全部指标权重合计为 {total_weight}（应为1），启动考核前请调整"
+        warning = f"当前任务指标权重合计为 {total_weight}（应为1），启动考核前请调整"
     return {"message": "更新成功", "warning": warning}
 
 

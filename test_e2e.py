@@ -549,11 +549,14 @@ test('Unauthenticated submit blocked', r.status_code == 403, f'status={r.status_
 
 # 7) 非登录用户带正确令牌可打分（正常扫码路径）
 #    注意：需先重置该考核人，否则若其已提交则会被「考核已完成」拦下（400）
+#    指标已按 session 隔离，需取当前任务实际指标 ID
+r = client.get(f'{BASE}/assess/1')
+_cur_ind_ids = [int(m) for m in re.findall(r'data-indicator-id="(\d+)"', r.text)]
 client.post(f'{BASE}/api/scores/1/reset')
 r = _anon2.post(f'{BASE}/api/scores/1/batch',
                 headers={'X-Access-Token': _tok1},
                 json={'evaluatee_id': 1,
-                      'scores': [{'indicator_id': int(i), 'score': 86} for i in ind_ids[:1]]})
+                      'scores': [{'indicator_id': int(i), 'score': 86} for i in _cur_ind_ids[:1]]})
 test('Token allows scoring', r.status_code == 200, f'status={r.status_code}, resp={r.text[:150]}')
 
 # 8) 重置令牌后旧令牌立即失效
@@ -592,8 +595,11 @@ ws2.append(['1001', '2001', 1.0])
 wb2.save(buf2); buf2.seek(0)
 r = client.post(f'{BASE}/api/import/relations', files={'file': ('t.xlsx', buf2)})
 test('Import relations to KP session', r.json().get('success'))
+# 指标已按 session 隔离，每个新任务的指标 ID 不同，需重新获取当前任务的实际指标 ID
+r = client.get(f'{BASE}/assess/1')
+kp_ind_ids = [int(m) for m in re.findall(r'data-indicator-id="(\d+)"', r.text)]
 client.post(f'{BASE}/api/scores/1/batch', json={
-    'evaluatee_id': 1, 'scores': [{'indicator_id': iid, 'score': 77} for iid in ind_ids]
+    'evaluatee_id': 1, 'scores': [{'indicator_id': iid, 'score': 77} for iid in kp_ind_ids]
 })
 r = client.post(f'{BASE}/api/sessions/{kp_sid}/lifecycle', json={'action': 'start', 'clear_scores': False})
 d = r.json()

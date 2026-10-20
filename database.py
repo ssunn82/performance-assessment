@@ -139,12 +139,18 @@ class Database:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS indicators (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER,
                 name TEXT NOT NULL,
                 weight REAL DEFAULT 1.0,
                 max_score REAL DEFAULT 100,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # 存量迁移：为 indicators 增加 session_id 列（列已存在时跳过）
+        try:
+            cursor.execute("ALTER TABLE indicators ADD COLUMN session_id INTEGER")
+        except sqlite3.OperationalError:
+            pass
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS scores (
@@ -222,20 +228,58 @@ class Database:
         # 存量迁移：把全局 evaluatees 的属性按 session 复制到 session_evaluatees
         self._migrate_session_evaluatees()
         self._migrate_session_assessors()
+        # 存量迁移：把无 session_id 的指标归到当前考核任务（改造前全局共享的指标）
+        self._migrate_indicators_session()
+
+    def _migrate_indicators_session(self):
+        """
+        改造前 indicators 为全局表；改造后要求每个考核任务拥有独立指标集。
+        1. 无 session_id 的存量指标先归到最早的考核任务作为「源指标」。
+        2. 为所有没有指标的考核任务复制一套源指标（或默认指标），避免既有任务因无指标而无法启动。
+        后续新建考核任务时会从当前任务复制一套独立指标，因此各任务指标互不影响。
+        """
+        cursor = self.conn.cursor()
+
+        # 1. 为无 session_id 的存量指标指定归属（取 id 最小的 session）
+        cursor.execute("SELECT COUNT(*) as cnt FROM indicators WHERE session_id IS NULL")
+        if cursor.fetchone()['cnt'] > 0:
+            cursor.execute("SELECT id FROM assessment_sessions ORDER BY id LIMIT 1")
+            source_row = cursor.fetchone()
+            source_sid = source_row['id'] if source_row else self.get_current_session_id()
+            cursor.execute("UPDATE indicators SET session_id = ? WHERE session_id IS NULL", (source_sid,))
+            self.conn.commit()
+
+        # 2. 确保每个 session 至少有一套指标
+        cursor.execute("SELECT id FROM assessment_sessions")
+        all_sessions = [r['id'] for r in cursor.fetchall()]
+        for sid in all_sessions:
+            cursor.execute("SELECT COUNT(*) as cnt FROM indicators WHERE session_id = ?", (sid,))
+            if cursor.fetchone()['cnt'] > 0:
+                continue
+            # 从任意其他有指标的 session 复制
+            cursor.execute("""
+                SELECT name, weight, max_score FROM indicators
+                WHERE session_id = (SELECT session_id FROM indicators WHERE session_id != ? LIMIT 1)
+            """, (sid,))
+            rows = cursor.fetchall()
+            if rows:
+                for row in rows:
+                    cursor.execute(
+                        "INSERT INTO indicators (session_id, name, weight, max_score) VALUES (?, ?, ?, ?)",
+                        (sid, row['name'], row['weight'], row['max_score'])
+                    )
+            else:
+                # 全库无任何指标，创建默认指标
+                defaults = [("工作业绩", 0.7, 100), ("能力评价", 0.3, 100)]
+                for name_i, w, mx in defaults:
+                    cursor.execute(
+                        "INSERT INTO indicators (session_id, name, weight, max_score) VALUES (?, ?, ?, ?)",
+                        (sid, name_i, w, mx)
+                    )
+        self.conn.commit()
 
     def _seed_default_data(self):
         cursor = self.conn.cursor()
-        cursor.execute("SELECT COUNT(*) as cnt FROM indicators")
-        if cursor.fetchone()['cnt'] == 0:
-            defaults = [
-                ("工作业绩", 0.7, 100),
-                ("能力评价", 0.3, 100),
-            ]
-            for name, w, mx in defaults:
-                cursor.execute(
-                    "INSERT INTO indicators (name, weight, max_score) VALUES (?,?,?)",
-                    (name, w, mx)
-                )
 
         cursor.execute("SELECT COUNT(*) as cnt FROM assessment_sessions")
         if cursor.fetchone()['cnt'] == 0:
@@ -243,6 +287,21 @@ class Database:
                 "INSERT INTO assessment_sessions (name, quarter, status, lifecycle) VALUES (?, ?, 'active', 'running')",
                 ("2026年二季度中层考核", "2026-Q2")
             )
+            self.conn.commit()
+
+        # 默认指标必须关联到默认考核任务，实现按 session 隔离
+        cursor.execute("SELECT COUNT(*) as cnt FROM indicators")
+        if cursor.fetchone()['cnt'] == 0:
+            default_session_id = self.get_current_session_id()
+            defaults = [
+                ("工作业绩", 0.7, 100),
+                ("能力评价", 0.3, 100),
+            ]
+            for name, w, mx in defaults:
+                cursor.execute(
+                    "INSERT INTO indicators (session_id, name, weight, max_score) VALUES (?,?,?,?)",
+                    (default_session_id, name, w, mx)
+                )
 
         cursor.execute("SELECT COUNT(*) as cnt FROM admin_users")
         if cursor.fetchone()['cnt'] == 0:
@@ -385,13 +444,42 @@ class Database:
     # ========== 会话管理 ==========
     def create_session(self, name: str, quarter: str) -> int:
         cursor = self.conn.cursor()
+        # 取当前任务指标作为新任务的初始指标集
+        current = self.get_current_session()
         cursor.execute("UPDATE assessment_sessions SET status = 'inactive'")
         cursor.execute(
             "INSERT INTO assessment_sessions (name, quarter, status, lifecycle) VALUES (?, ?, 'active', 'draft')",
             (name, quarter)
         )
+        new_sid = cursor.lastrowid
+
+        # 复制当前任务的指标到新任务，实现每次考核指标可独立调整
+        if current:
+            cursor.execute(
+                "SELECT name, weight, max_score FROM indicators WHERE session_id = ?",
+                (current['id'],)
+            )
+            source = cursor.fetchall()
+        else:
+            source = []
+
+        if source:
+            for row in source:
+                cursor.execute(
+                    "INSERT INTO indicators (session_id, name, weight, max_score) VALUES (?, ?, ?, ?)",
+                    (new_sid, row['name'], row['weight'], row['max_score'])
+                )
+        else:
+            # 当前任务无指标时，给新任务一套默认指标，避免启动校验失败
+            defaults = [("工作业绩", 0.7, 100), ("能力评价", 0.3, 100)]
+            for name_i, w, mx in defaults:
+                cursor.execute(
+                    "INSERT INTO indicators (session_id, name, weight, max_score) VALUES (?, ?, ?, ?)",
+                    (new_sid, name_i, w, mx)
+                )
+
         self.conn.commit()
-        return cursor.lastrowid
+        return new_sid
 
     def get_all_sessions(self) -> List[Dict]:
         cursor = self.conn.cursor()
@@ -427,6 +515,7 @@ class Database:
         cursor.execute("DELETE FROM assessment_relations WHERE session_id = ?", (session_id,))
         cursor.execute("DELETE FROM session_evaluatees WHERE session_id = ?", (session_id,))
         cursor.execute("DELETE FROM session_assessors WHERE session_id = ?", (session_id,))
+        cursor.execute("DELETE FROM indicators WHERE session_id = ?", (session_id,))
         cursor.execute("DELETE FROM assessment_sessions WHERE id = ?", (session_id,))
         self.conn.commit()
 
@@ -461,7 +550,7 @@ class Database:
         """
         校验当前 session 的权重规则：
         1. 考核关系：每个被考核人的所有考核人权重合计应为 1
-        2. 指标：全部指标权重合计应为 1（指标为全局配置）
+        2. 指标：当前任务的全部指标权重合计应为 1（指标已按 session 隔离）
         返回 {"relation_issues": [...], "indicator_sum": float, "ok": bool}
         relation_issues 每项: {evaluatee_name, sum, relations: [{assessor_name, weight}]}
         """
@@ -488,8 +577,8 @@ class Database:
                 "detail": row['detail']
             })
 
-        # 指标权重：全局合计
-        cursor.execute("SELECT SUM(weight) as s FROM indicators")
+        # 指标权重：按当前 session 合计
+        cursor.execute("SELECT SUM(weight) as s FROM indicators WHERE session_id = ?", (session_id,))
         row = cursor.fetchone()
         indicator_sum = round(row['s'] if row['s'] is not None else 0, 4)
         indicator_ok = abs(indicator_sum - 1.0) <= self.WEIGHT_TOLERANCE
@@ -1080,18 +1169,22 @@ class Database:
 
     # ========== 指标 ==========
     def add_indicator(self, name: str, weight: float = 1.0,
-                      max_score: float = 100) -> int:
+                      max_score: float = 100, session_id: int = None) -> int:
+        if session_id is None:
+            session_id = self.get_current_session_id()
         cursor = self.conn.cursor()
         cursor.execute(
-            "INSERT INTO indicators (name, weight, max_score) VALUES (?, ?, ?)",
-            (name, weight, max_score)
+            "INSERT INTO indicators (session_id, name, weight, max_score) VALUES (?, ?, ?, ?)",
+            (session_id, name, weight, max_score)
         )
         self.conn.commit()
         return cursor.lastrowid
 
-    def get_all_indicators(self) -> List[Dict]:
+    def get_all_indicators(self, session_id: int = None) -> List[Dict]:
+        if session_id is None:
+            session_id = self.get_current_session_id()
         cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM indicators ORDER BY id")
+        cursor.execute("SELECT * FROM indicators WHERE session_id = ? ORDER BY id", (session_id,))
         return [dict(row) for row in cursor.fetchall()]
 
     def delete_indicator(self, indicator_id: int):
