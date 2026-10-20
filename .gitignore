@@ -8,6 +8,7 @@ __pycache__/
 data_v2.db
 data_v2.db-wal
 data_v2.db-shm
+data_v2.db.backup.*
 data.db
 data.db-wal
 data.db-shm
