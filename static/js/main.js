@@ -244,6 +244,46 @@ async function deleteIndicator(id) {
     if (res.ok) location.reload();
 }
 
+function editIndicator(id) {
+    const row = document.querySelector(`#indicators-table tr[data-indicator-id="${id}"]`);
+    if (!row) return;
+    const form = document.getElementById('edit-indicator-form');
+    form.indicator_id.value = id;
+    form.name.value = row.dataset.name;
+    form.weight.value = (parseFloat(row.dataset.weight) * 100).toFixed(1);
+    form.max_score.value = row.dataset.maxScore;
+    document.getElementById('edit-indicator-modal').style.display = 'flex';
+}
+
+function closeEditIndicatorModal() {
+    document.getElementById('edit-indicator-modal').style.display = 'none';
+}
+
+document.getElementById('edit-indicator-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const id = form.indicator_id.value;
+    const data = {
+        name: form.name.value,
+        weight: parseFloat(form.weight.value) / 100,
+        max_score: parseFloat(form.max_score.value) || 100
+    };
+    const res = await fetch(`/api/indicators/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    });
+    if (res.ok) {
+        const result = await res.json().catch(() => ({}));
+        let msg = '更新成功！';
+        if (result.warning) msg += '\n\n' + result.warning;
+        alert(msg);
+        location.reload();
+    } else {
+        alert('更新失败');
+    }
+});
+
 // ========== Excel 导入 ==========
 async function importAssessors(input) {
     const file = input.files[0];

@@ -1096,8 +1096,29 @@ class Database:
 
     def delete_indicator(self, indicator_id: int):
         cursor = self.conn.cursor()
+        # 先清理引用该指标的所有打分及历史归档，再删除指标本身
         cursor.execute("DELETE FROM scores WHERE indicator_id = ?", (indicator_id,))
+        cursor.execute("DELETE FROM score_history WHERE indicator_id = ?", (indicator_id,))
         cursor.execute("DELETE FROM indicators WHERE id = ?", (indicator_id,))
+        self.conn.commit()
+
+    def update_indicator(self, indicator_id: int, name: str = None, weight: float = None, max_score: float = None):
+        cursor = self.conn.cursor()
+        fields = []
+        params = []
+        if name is not None:
+            fields.append("name = ?")
+            params.append(name)
+        if weight is not None:
+            fields.append("weight = ?")
+            params.append(weight)
+        if max_score is not None:
+            fields.append("max_score = ?")
+            params.append(max_score)
+        if not fields:
+            return
+        params.append(indicator_id)
+        cursor.execute(f"UPDATE indicators SET {', '.join(fields)} WHERE id = ?", params)
         self.conn.commit()
 
     # ========== 打分 ==========

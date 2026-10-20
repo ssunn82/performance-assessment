@@ -76,6 +76,12 @@ class IndicatorCreate(BaseModel):
     max_score: float = 100
 
 
+class IndicatorUpdate(BaseModel):
+    name: str = None
+    weight: float = None
+    max_score: float = None
+
+
 class ScoreBatchSave(BaseModel):
     evaluatee_id: int
     scores: List[dict]
@@ -522,6 +528,21 @@ async def delete_indicator(request: Request, indicator_id: int):
     db = get_db()
     db.delete_indicator(indicator_id)
     return {"message": "删除成功"}
+
+
+@app.put("/api/indicators/{indicator_id}", response_class=JSONResponse)
+async def update_indicator(request: Request, indicator_id: int, req: IndicatorUpdate):
+    if not is_logged_in(request):
+        return JSONResponse({"error": "未登录"}, status_code=401)
+    db = get_db()
+    db.update_indicator(indicator_id, name=req.name, weight=req.weight, max_score=req.max_score)
+    # 更新后校验全部指标权重合计
+    indicators = db.get_all_indicators()
+    total_weight = round(sum(i['weight'] for i in indicators), 4)
+    warning = None
+    if abs(total_weight - 1.0) > 0.001:
+        warning = f"当前全部指标权重合计为 {total_weight}（应为1），启动考核前请调整"
+    return {"message": "更新成功", "warning": warning}
 
 
 # ==================== 打分 API ====================

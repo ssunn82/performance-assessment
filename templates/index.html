@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>中层绩效考核 - 管理后台</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=20261020">
+    <link rel="stylesheet" href="/static/css/style.css?v=202610201">
 </head>
 <body>
     <div class="container">
@@ -277,22 +277,51 @@
             <div class="card">
                 <h2>指标列表</h2>
                 <div class="table-wrapper">
-                <table class="data-table">
+                <table class="data-table" id="indicators-table">
                     <thead>
                         <tr><th>指标名称</th><th>权重</th><th>满分</th><th>操作</th></tr>
                     </thead>
                     <tbody>
                         {% for i in indicators %}
-                        <tr>
+                        <tr data-indicator-id="{{ i.id }}" data-name="{{ i.name }}" data-weight="{{ i.weight }}" data-max-score="{{ i.max_score }}">
                             <td>{{ i.name }}</td>
                             <td>{{ "%.0f%%" | format(i.weight * 100) }}</td>
                             <td>{{ i.max_score }}</td>
-                            <td><button class="btn-delete" onclick="deleteIndicator({{ i.id }})">删除</button></td>
+                            <td>
+                                <button class="btn-save btn-sm" onclick="editIndicator({{ i.id }})">编辑</button>
+                                <button class="btn-delete btn-sm" onclick="deleteIndicator({{ i.id }})">删除</button>
+                            </td>
                         </tr>
                         {% endfor %}
                     </tbody>
                 </table>
                 </div>
+            </div>
+        </div>
+
+        <!-- 编辑指标对话框 -->
+        <div class="modal-overlay" id="edit-indicator-modal" style="display:none;">
+            <div class="modal-content">
+                <h3>编辑考核指标</h3>
+                <form id="edit-indicator-form">
+                    <input type="hidden" name="indicator_id">
+                    <div class="form-row">
+                        <label>指标名称：</label>
+                        <input type="text" name="name" required>
+                    </div>
+                    <div class="form-row">
+                        <label>权重（%）：</label>
+                        <input type="number" name="weight" step="0.1" min="0" max="100" required>
+                    </div>
+                    <div class="form-row">
+                        <label>满分：</label>
+                        <input type="number" name="max_score" step="1" min="1" required>
+                    </div>
+                    <div class="modal-actions">
+                        <button type="submit" class="btn-primary">保存</button>
+                        <button type="button" class="btn-back" onclick="closeEditIndicatorModal()">取消</button>
+                    </div>
+                </form>
             </div>
         </div>
 
@@ -372,6 +401,6 @@
     </div>
 
     <script>const CURRENT_SESSION_ID = {{ current_session.id if current_session else 'null' }};</script>
-    <script src="/static/js/main.js?v=20261020"></script>
+    <script src="/static/js/main.js?v=202610201"></script>
 </body>
 </html>
