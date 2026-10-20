@@ -421,7 +421,9 @@ class Database:
 
     def delete_session(self, session_id: int):
         cursor = self.conn.cursor()
+        # 先清理该任务下的所有从表数据（含历史归档），否则外键约束会阻止删除
         cursor.execute("DELETE FROM scores WHERE session_id = ?", (session_id,))
+        cursor.execute("DELETE FROM score_history WHERE session_id = ?", (session_id,))
         cursor.execute("DELETE FROM assessment_relations WHERE session_id = ?", (session_id,))
         cursor.execute("DELETE FROM session_evaluatees WHERE session_id = ?", (session_id,))
         cursor.execute("DELETE FROM session_assessors WHERE session_id = ?", (session_id,))
